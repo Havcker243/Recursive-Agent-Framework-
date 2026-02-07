@@ -9,21 +9,39 @@
                             "default": null,
                             "type": "string",
                             "description": "The starting context that is passed to the LLM that's already cached, if the model is running on a cloud provider that supports input token caching."
-                        },
+                        }
+                    },
+                    {
                         "starting_input_tokens": {
                             "type": "string",
                             "description": "The starting context that is passed to the LLM."
-                        },
+                        }
+                    },
+                    {
                         "tools": {
                             "type": ["MCP tool"],
                             "description": "The list of tools that are available to the LLM."
-                        },
-                        "output_format": {
-                            "type": "JSON Schema",
+                        }
+                    },
+                    {
+                        "output_format": { //could have "default": null, but one of the core design dogmas is to always require structured output
+                            "type": "JSON Schema", //could use pedantic, JSON schema using schema.org, etc. Choose something that even small models could adhere to.
                             "description": "A JSON Schema that describes the expected output format of the LLM call."
                         }
+                    },
+                    {
+                        "model": {
+                            "type": "LiteLLM",
+                            "description": "The model that is being used by the agent. Use LiteLLM for this, and type should be a valid LiteLLM model with config options such as thinking level and verbosity."
+                        }
                     }
-                ]
+                ],
+                "returns": {
+                    "output": {
+                        "type": "this.args.output_format",
+                        "description": "The output of the agent, formatted according to the specified output format."
+                    }
+                }
             }
         },
         {
@@ -31,43 +49,59 @@
                 "description": "A group of agents that, given a set of parameters (for example a task spec, list of tools, and output format), return a list of each output that each agent in the consortium produces, excluding the outputs that don't match the expected output format.",
                 "args": [
                     {
-                        "output_format": {
-                            "type": "JSON Schema",
-                            "description": "A JSON Schema that describes the expected output format of each agent in the consortium."
+                        "agents": {
+                            "type": ["types.agent"],
+                            "description": "A list of agent objects that can be used in the consortium. Multiple could be passed for agent diversity. All must share the same output format. Part of function will be a for each loop over the agents setting agent.output_format to args.unified_output_format."
                         }
                     },
                     {
-                        "other_args": {
-                            "type": ["object"],
-                            "description": "Other arguments that are passed to each agent in the consortium."
+                        "unified_output_format": {
+                            "type": "types.agent.output_format",
+                            "description": "The unified output format that all agents in the consortium must use."
                         }
                     }
-                ]
+                ],
+                "returns": {
+                    "outputs": {
+                        "type": ["this.args.agents."],
+                        "description": "A list of outputs from each agent in the consortium."
+                    }
+                }
             }
         },
         {
-            "agent_jury_vote": {
-                "description": "A consortium of agents that vote on options from a list.",
+            "agent_jury": {
+                "description": "A consortium of agents that vote on options from a list. Expriment with different voting methods.",
                 "args": [
                     {
-                        "output_list": {
-                            "type": ["array"],
-                            "description": "A list of outputs from different agents."
+                        "input_list": {
+                            "type": ["any"],
+                            "description": "A list of options to be voted on by the agents."
                         }
                     },
                     {
-                        "voter": {
-                            "type": ["object"],
-                            "description": "The criteria used to vote on the best output."
+                        "voters": {
+                            "type": ["types.agent"],
+                            "description": "A list of agent objects that can be used as voters in the jury. Multiple could be passed for agent diversity. All will share the same output format, MVP could be index of selected vote or list of ranked choice options. Part of function will be a for each loop over the agents setting agent.output_format to args.unified_output_format."
                         }
+                    },
+                ],
+                "returns": {
+                    "voted_output": {
+                        "type": ["this.args.input_list.type"],
+                        "description": "The output that was voted on as the best."
                     }
-                ]
+                }
             }
         },
         {
             "task_spec": {
                 "description": "The specification of the task that is being executed by the RAF system.",
-                "args": "TODO: task args"
+                "args": [
+                    {
+                        "task_description": "plain text task description"
+                    }
+                ]
             }
         }
     ],
@@ -75,24 +109,14 @@
         "base_case_check": {
             // Is the current task a base case or a recursive step? Can it be meaningfully decomposed from here?
             "step_depth": 1,
-            "type": "agent_jury_vote",
+            "type": "types.agent_jury_vote",
             "options": [
                 {
                     "base_case": { //the task can't be decomposed any further
                         "base_case_agent_design_consortium": {
                             "step_depth": 2,
                             "description": "A group of agents that, given a task, context, list of tools, and output format, generate a list of potential base case executor agent designs. Output is a full agent starting context window including system prompt with task spec context, tooling, success condition, and output format.",
-                            "type": ,
-                            "output_list_type": {
-                                "base_case_agent_designs": [
-                                    {
-                                        "type": {
-                                            "name": "base_case_agent_design"
-                                        },
-
-                                    }
-                                ]
-                            }, //list of base case excecutor agent designs: includes system prompt, tooling, output format, etc..., 
+                            "type": "types.agent_consortium",
                             "return": {
                                 "base_agent_design_vote": {
                                     "step_depth": 3,
