@@ -1,0 +1,123 @@
+{
+    "types": [
+        {
+            "agent": {
+                "description": "One LLM instance.",
+                "args": [
+                    {
+                        "cached_starting_input_tokens": {
+                            "default": null,
+                            "type": "string",
+                            "description": "The starting context that is passed to the LLM that's already cached, if the model is running on a cloud provider that supports input token caching."
+                        },
+                        "starting_input_tokens": {
+                            "type": "string",
+                            "description": "The starting context that is passed to the LLM."
+                        },
+                        "tools": {
+                            "type": ["MCP tool"],
+                            "description": "The list of tools that are available to the LLM."
+                        },
+                        "output_format": {
+                            "type": "JSON Schema",
+                            "description": "A JSON Schema that describes the expected output format of the LLM call."
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "agent_consortium": {
+                "description": "A group of agents that, given a set of parameters (for example a task spec, list of tools, and output format), return a list of each output that each agent in the consortium produces, excluding the outputs that don't match the expected output format.",
+                "args": [
+                    {
+                        "output_format": {
+                            "type": "JSON Schema",
+                            "description": "A JSON Schema that describes the expected output format of each agent in the consortium."
+                        }
+                    },
+                    {
+                        "other_args": {
+                            "type": ["object"],
+                            "description": "Other arguments that are passed to each agent in the consortium."
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "agent_jury_vote": {
+                "description": "A consortium of agents that vote on options from a list.",
+                "args": [
+                    {
+                        "output_list": {
+                            "type": ["array"],
+                            "description": "A list of outputs from different agents."
+                        }
+                    },
+                    {
+                        "voter": {
+                            "type": ["object"],
+                            "description": "The criteria used to vote on the best output."
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "task_spec": {
+                "description": "The specification of the task that is being executed by the RAF system.",
+                "args": "TODO: task args"
+            }
+        }
+    ],
+    "raf_main": {
+        "base_case_check": {
+            // Is the current task a base case or a recursive step? Can it be meaningfully decomposed from here?
+            "step_depth": 1,
+            "type": "agent_jury_vote",
+            "options": [
+                {
+                    "base_case": { //the task can't be decomposed any further
+                        "base_case_agent_design_consortium": {
+                            "step_depth": 2,
+                            "description": "A group of agents that, given a task, context, list of tools, and output format, generate a list of potential base case executor agent designs. Output is a full agent starting context window including system prompt with task spec context, tooling, success condition, and output format.",
+                            "type": ,
+                            "output_list_type": {
+                                "base_case_agent_designs": [
+                                    {
+                                        "type": {
+                                            "name": "base_case_agent_design"
+                                        },
+
+                                    }
+                                ]
+                            }, //list of base case excecutor agent designs: includes system prompt, tooling, output format, etc..., 
+                            "return": {
+                                "base_agent_design_vote": {
+                                    "step_depth": 3,
+                                    "type": "agent_jury_vote",
+                                    "options": [
+                                        {
+                                            "base_case_agent_design": "base_case_agent_designs"
+                                        }
+                                    ],
+                                    "return": {
+                                        "base_case_agent": {
+
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "recursive_step": { //the task can be further decomposed
+
+                    }
+                }
+            ]
+        }
+    }
+}

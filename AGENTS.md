@@ -1,0 +1,1 @@
+This is just a plan, and I'm carefully curating it. I'm rarely going to want you to change more than 1 sentence at a time, so don't make changes to RAF-project-spec.md without my explicit instructions. Every time you make changes, read all the papers in the papers folder.
