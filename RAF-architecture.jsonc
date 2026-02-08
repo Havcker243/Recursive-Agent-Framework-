@@ -1,13 +1,41 @@
 {
     "types": [
         {
+            "raf_node": {
+                "description": "The recursive function behind the RAF.",
+                "returns": {
+                    "state": {
+                        "type": "types.state_tree_node",
+                        "description": "The result of the RAF node execution, and any relevant details about the success or failure for debugging purposes and context any nodes that are waiting for this node to complete."
+                    }
+                }
+            }
+        },
+        {
+            "state_tree_node": {
+                "description": "A node on the tree-like structure of the RAF state.",
+                "returns": {
+                    "state": {
+                        "success": {
+                            "type": "boolean || null"
+                        },
+                        "message": {
+                            "type": "string || null"
+                        }
+                    },
+                    "children": {
+                        "type": ["types.state_tree_node"]
+                    }
+                }
+            }
+        },
+        {
             "agent": {
                 "description": "One LLM instance.",
                 "args": [
                     {
                         "cached_starting_input_tokens": {
-                            "default": null,
-                            "type": "string",
+                            "type": "string || null",
                             "description": "The starting context that is passed to the LLM that's already cached, if the model is running on a cloud provider that supports input token caching."
                         }
                     },
@@ -24,7 +52,7 @@
                         }
                     },
                     {
-                        "output_format": { //could have "default": null, but one of the core design dogmas is to always require structured output
+                        "output_format": { //could have || null, but one of the core design dogmas is to always require structured output
                             "type": "JSON Schema", //could use pedantic, JSON schema using schema.org, etc. Choose something that even small models could adhere to.
                             "description": "A JSON Schema that describes the expected output format of the LLM call."
                         }
@@ -105,43 +133,40 @@
             }
         }
     ],
-    "raf_main": {
-        "base_case_check": {
-            // Is the current task a base case or a recursive step? Can it be meaningfully decomposed from here?
-            "step_depth": 1,
-            "type": "types.agent_jury_vote",
-            "options": [
-                {
-                    "base_case": { //the task can't be decomposed any further
-                        "base_case_agent_design_consortium": {
-                            "step_depth": 2,
-                            "description": "A group of agents that, given a task, context, list of tools, and output format, generate a list of potential base case executor agent designs. Output is a full agent starting context window including system prompt with task spec context, tooling, success condition, and output format.",
-                            "type": "types.agent_consortium",
-                            "return": {
-                                "base_agent_design_vote": {
-                                    "step_depth": 3,
-                                    "type": "agent_jury_vote",
-                                    "options": [
-                                        {
-                                            "base_case_agent_design": "base_case_agent_designs"
-                                        }
-                                    ],
-                                    "return": {
-                                        "base_case_agent": {
-
-                                        }
+    "raf_main_function": {
+        "type": "types.raf_node",
+        "return": {
+            "base_case_check": {
+                // Is the current task a base case or a recursive step? Can it be meaningfully decomposed from here?
+                "type": "types.agent_jury",
+                "cases": [
+                    {
+                        "base_case": { //the task can't be decomposed any further
+                            "base_case_agent_design_consortium": {
+                                "step_depth": 2,
+                                "description": "A group of agents that, given a task, context, list of tools, and output format, generate a list of potential base case executor agent designs. A base case excecutor agent design is a full agent starting context window, including system prompt with task spec context, tooling, success condition, and output format, which includes all context nescessary to start excecution immediately. It should have a very focused context window, with very clear instructions, only the tools it will use, and should excecute only one step. Multiple steps should be split between sequential sibling recursive nodes.",
+                                "type": "types.agent_consortium",
+                                "return": {
+                                    "base_agent_design_vote": {
+                                        "step_depth": 3,
+                                        "type": "agent_jury_vote",
+                                        "options": [
+                                            {
+                                                "base_case_agent_design": "base_case_agent_designs"
+                                            }
+                                        ]
                                     }
                                 }
                             }
                         }
-                    }
-                },
-                {
-                    "recursive_step": { //the task can be further decomposed
+                    },
+                    {
+                        "recursive_step": { //the task can be further decomposed
 
+                        }
                     }
-                }
-            ]
+                ]
+            }
         }
     }
 }
