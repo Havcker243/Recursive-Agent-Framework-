@@ -99,7 +99,6 @@ raf-plan/
 ├── README.md                 # This file
 ├── RAF-pseudocode.ts         # Ground truth algorithm (DO NOT MODIFY)
 ├── RAF-project-spec.md       # Technical specification
-├── RAF-architecture.jsonc    # Type definitions
 ├── RAF-diagram.md            # Mermaid diagrams
 ├── AGENTS.md                 # AI agent instructions
 └── papers/                   # Reference papers
