@@ -9,7 +9,7 @@
 
 ## The Napkin Prototype
 
-![RAF Whiteboard Diagram](./napkin-prototype.jpg)
+![RAF Whiteboard Diagram](./whiteboard.jpeg)
 
 *Original whiteboard sketch from the design session*
 
@@ -109,7 +109,7 @@ See [RAF-complete-flow.md](./RAF-complete-flow.md) for the full diagram.
 ```
 raf-plan/
 ├── README.md                 # This file
-├── napkin-prototype.jpg      # Original whiteboard sketch
+├── whiteboard.jpeg           # Original whiteboard sketch
 ├── RAF-pseudocode.ts         # Ground truth algorithm (DO NOT MODIFY)
 ├── RAF-project-spec.md       # Technical specification
 ├── RAF-complete-flow.md      # Complete algorithm flow with all agent clusters

@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+
+# Build outputs
+dist/
+build/
+*.log
+
+# Temp files
+*.tmp
+*.bak
