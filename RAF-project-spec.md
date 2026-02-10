@@ -1,29 +1,199 @@
-# RAF: A generalized agent orchestration framework for any horizon-length agentic task
+# RAF: Recursive Agent Framework
 
-A framework that implements Agent Communication Protocol to provide an agent that 
+A recursive agent orchestration framework for any horizon-length agentic task. RAF implements a divide-and-conquer approach where tasks are recursively decomposed until they reach executable base cases, with multi-agent voting at each decision point.
 
-## Design dogmas
+## Design Dogmas
 
-- **Signal to noise ratio optimization:** This isn't just the main reason why I'm building this system, it's a core ideology that applies to every part of it. Each member of the swarm should handle as little noise and as much signal as possible.
+- **Signal-to-noise ratio optimization:** Each agent in the system handles as little noise and as much signal as possible. Context windows are minimized to only what's necessary for the current decision or execution.
 
-- **Recursion:** This system should break down tasks into minimum-viable context windows. No context window should be used for something that would be beneficial to be split up.
+- **Recursion:** Tasks are broken down into minimum-viable context windows. No context window should be used for something that would benefit from being split up.
 
-- **Multi-Model:** This system should improve the more models it has access to. The more diversity in selection of models, the more diversity of opinion in descision making, the more the system can dedicate the appropriate compute to each task, the more the system can take advantage of a mixture-of-experts approach, etc.
+- **Multi-Model:** The system improves with more model diversity. Heterogeneous model selection enables mixture-of-experts approaches, appropriate compute allocation per task, and epistemic diversity in decision-making.
 
-- **Decision aggregation:** Each decision made by the system should be voted on by a congress of agents. For example, when a task is presented to a stem agent, it should spawn a consortium of agents to come up with all the possible ways of breaking down the task to the next batch of RLMs. 
+- **Decision aggregation:** Critical decisions are voted on by agent juries. When decomposing a task, a consortium generates proposals, then a jury votes on the best option.
 
-- **Strong enforcement of output format and typing:** This allows a much logic as possible to be hard coded, and makes it easy to throw out bad responses because an LLM not following output format is a great indicator that it outputted a bad response.
+- **Strong output format enforcement:** All agent outputs conform to JSON schemas. This enables hard-coded validation logic and provides a reliable signal for detecting bad responses.
 
-## Definitions
+## Core Architecture
 
-- **RLM:** Recursive language model, the primary technology behind this system. A language model that breaks down its task into smaller parts, or excecutes the task if it shouldn't be broken down any further. Each RLM starts as a stem agent. 
+### Class Hierarchy
 
-- **Stem agent:** These agents are like stem cells in biology, with a wide context window and access to all available tools, but they don't excecute anything and are only for planning. They are used at each step of an RLM for context window optimization and to orchestrate a recursive step. The life cycle of a stem agent consists of calling a consortium on the task spec then deploying either a base-case excecutor agent or the next set of RLMs. (should probably be hard-coded and not actually involve an llm, stem agent might be a misnomer.)
+```
+Agent<T>              — Single LLM instance with tools, output format, and model
+    ↓
+AgentCluster<T>       — Base class for groups of agents with shared context
+    ↓
+├── AgentConsortium<T> — Generates diverse proposals (no voting)
+└── AgentJury<T>       — Votes on options from a list
+```
 
-- **Base-case agent:** This is an agent that is given a very specific smallest possible task spec, set of tools, and output formatting. Returns either a promise of success or an error message.
+### RafNode
 
-- **Consortium:** A team of agents (ideally consisting of a selection of different models depending on how many are available to the system) that come up with all possible solutions to a problem. For example, when given the current task from a stem agent, they would all independently come up with all the different ways of breaking down a task into a set of more than one next recursive calls. In some cases, the next set of recursive calls doesn't have to be completely synchronous and excecuted in a specific order or completely asynchronous, it can instead use a hybrid model where some steps are allowed require the output of a sibling step and will therefore wait for it to return a result and/or some additional context before proceeding. Next, another smaller team of agents aggregates all the proposals into a single list via a union, with duplicates being intelligently merged to include all aspects of each version of the duplicate. If there are any conflicts in a duplicate, then it isn't a duplicate and shouldn't be merged. Next, a congressional vote is called on which aggregation is the most accurate, with the context windows of all voters including the current step's original task spec and all of the proposed aggregations. That congress will then return which list of options is the best, then a second fresh congressional vote will be called on which option out of that list is the best, with a "base-case" option appended to that list of choices.
+The recursive execution unit. Each RafNode:
 
-- **Congress:** A temporary ensemble of heterogeneous agents that performs decision-making as probabilistic inference. Each member independently evaluates the full choice set and returns a complete ranking under a fixed rubric. Rankings are aggregated using a reliability-weighted Plackett–Luce model to produce a posterior distribution over option quality. Congress outputs (a) the selected action for control flow and (b) a decision record containing the full aggregated ranking, posterior scores, and uncertainty (b is only logged and not passed back to the caller of the congress, only a is returned). This decision record is used for auditing, backtracking, and fallbacks, while the selected action is used to advance execution. Agent reliabilities are updated online from downstream validation, and highly correlated rankings are downweighted to preserve epistemic diversity. MVP will be non-self-improving, and just use a fixed consortium of diverse agents. 
+1. **Decides base case vs recursive case** via AgentJury vote
+2. **If base case:** Designs and executes a focused single-step agent
+3. **If recursive case:** Plans child nodes with optional inter-sibling dependencies
 
-- **Entry point agent:** The highest available intelligence model of the system. It's called by a user or other AI system that wants to call this system over ACP, and parses the base task.
+#### RafNode State
+
+```typescript
+interface nodeResult {
+    name: string
+    success?: boolean
+    execSummary?: string     // Context for summarization and child node input
+    childExecutions: {[key: string]: nodeResult}
+}
+```
+
+#### RafNode Lifecycle
+
+```
+initialized → running → completed
+     ↓
+  wait for dependency resolution from parent
+     ↓
+  wait for dependent siblings (if any)
+     ↓
+  base_case_vote() → AgentJury decides
+     ↓
+  ├── base_case()      → design agent → execute → analyze
+  └── recursive_case() → plan children → spawn RafNodes → analyze
+```
+
+### Agent
+
+A single LLM instance configured with:
+
+- **context:** Starting input (supports prompt caching via `cachedInput`)
+- **tools:** MCP tool definitions available to the model
+- **output_format:** JSON Schema for structured output
+- **model:** LiteLLM model configuration (includes thinking level, verbosity)
+
+Returns `AgentCallResult<T>` with success flag and typed JSON output.
+
+### AgentCluster
+
+Base class for agent groups. Manages:
+
+- **agents:** Pool of agents (different models for diversity)
+- **unified_output_format:** Schema all outputs must match
+- **context:** Shared cached context for all members
+- **size:** Number of parallel invocations
+
+Supports input caching for cloud providers (via `cache_input_raw`/`cache_input_json`).
+
+### AgentConsortium
+
+Extends AgentCluster. Calls all agents and returns list of valid outputs (excluding format violations). Used to generate diverse proposals.
+
+### AgentJury
+
+Extends AgentCluster. Takes a list of options, has all agents vote, then aggregates votes to select winner.
+
+- **options:** List of choices to vote on
+- **ballot_format:** Schema for vote output
+- **gather_votes():** Parallel vote collection
+- **process_votes():** Vote aggregation algorithm (MVP: winner-takes-all)
+
+## Execution Flow
+
+### Base Case Flow
+
+```
+1. AgentConsortium generates agent designs
+   - Each design: full agent config (tools, context, output format, success condition)
+   - Designs should be single-step executors
+
+2. AgentJury votes on best design
+
+3. Agent executes the winning design
+
+4. AgentConsortium analyzes execution result
+   - Returns {success: boolean, info: string}
+
+5. AgentJury votes on best analysis
+
+6. Return nodeResult with analysis
+```
+
+### Recursive Case Flow
+
+```
+1. AgentConsortium generates decomposition plans
+   - Each plan: list of childNodePlan objects
+
+2. Filter out plans with circular sibling dependencies
+
+3. AgentConsortium merges/concatenates similar plans
+   - Merge identical/near-identical plans
+   - Keep conflicting plans separate
+
+4. AgentJury votes on best concatenation
+
+5. AgentJury votes on best final plan from concatenation
+
+6. Spawn child RafNodes with their contexts
+   - Configure sibling dependencies per plan
+
+7. Execute all children in parallel
+   - Children with dependencies wait for dependent siblings
+
+8. AgentConsortium analyzes combined child results
+
+9. AgentJury votes on best analysis
+
+10. Return nodeResult with child executions
+```
+
+### Sibling Dependencies
+
+Child nodes can depend on sibling nodes' output:
+
+```typescript
+interface childNodePlan {
+    context: ModelInput       // Starting context for this child
+    name: string              // Identifier
+    dependsOn: string[]       // Names of siblings to wait for
+}
+```
+
+When a child has dependencies:
+1. It waits for parent to call `set_dependencies()`
+2. It awaits all dependent sibling promises
+3. Dependent results are prepended to its context
+4. Then it proceeds with base case/recursive decision
+
+## Configuration
+
+Key tunable parameters in jury/consortium configs:
+
+```typescript
+{
+    agents: Agent[]        // Pool of agents (model diversity)
+    format: JSONSchema     // Output schema
+    context: string        // Base context
+    max_temp?: number      // Temperature ceiling
+    min_temp?: number      // Temperature floor
+    size?: number          // Number of parallel calls
+    options?: T[]          // Voting options (jury only)
+}
+```
+
+## Entry Point
+
+The root RafNode is instantiated with the initial task context and no parent. It has no dependencies to wait for and immediately proceeds to the base case vote.
+
+```typescript
+const root = new RafNode(taskContext)
+const result = await root.call()
+```
+
+## Implementation Notes
+
+- Use LiteLLM for model abstraction
+- Use MCP for tool definitions
+- Prompt caching reduces cost for repeated context
+- All outputs are validated against JSON schemas before use
+- Invalid outputs are filtered, not retried (consortium handles diversity)
+- Circular dependency detection prevents deadlocks in sibling plans
