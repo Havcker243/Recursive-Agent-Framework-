@@ -7,6 +7,14 @@
 
 ---
 
+## The Napkin Prototype
+
+![RAF Whiteboard Diagram](./napkin-prototype.jpg)
+
+*Original whiteboard sketch from the design session*
+
+---
+
 ## What is RAF?
 
 RAF (Recursive Agent Framework) is a novel approach to AI agent orchestration that solves the fundamental problem of **context window limitations** in large language models.
@@ -66,19 +74,23 @@ RAF solves this with:
 
 ### Execution Flow
 
-1. **RafNode receives task** with context
-2. **AgentJury votes:** Is this a base case or recursive case?
-3. **If base case:**
-   - AgentConsortium designs executor agents
-   - AgentJury selects best design
-   - Agent executes
-   - AgentConsortium + AgentJury analyze result
-4. **If recursive:**
-   - AgentConsortium proposes decomposition plans
-   - Plans filtered for circular dependencies
-   - AgentJury selects best plan
-   - Child RafNodes spawned (with optional sibling dependencies)
-   - Results analyzed and returned
+Every decision point uses the **Consortium → Jury** pattern:
+
+| Step | AgentConsortium | AgentJury |
+|------|-----------------|-----------|
+| **1. Base Case Decision** | Generate base/recursive proposals | Vote: base case or recursive? |
+| **2a. Agent Design** *(base case)* | Generate executor designs | Vote: best design? |
+| **2b. Execution** | — | Agent executes task |
+| **2c. Success Vote** | Analyze execution output | Vote: did it succeed? |
+| **3a. Plan Generation** *(recursive)* | Generate decomposition plans | — |
+| **3b. Plan Merge** | Merge similar plans | Vote: best merge? |
+| **3c. Plan Selection** | — | Vote: best final plan? |
+| **3d. Child Execution** | — | Spawn RafNodes, execute in parallel |
+| **3e. Success Vote** | Analyze combined results | Vote: overall success? |
+
+**Key design decision:** Success determination is a *separate* consortium→jury vote after execution, not part of execution itself.
+
+See [RAF-complete-flow.md](./RAF-complete-flow.md) for the full diagram.
 
 ---
 
@@ -97,9 +109,11 @@ RAF solves this with:
 ```
 raf-plan/
 ├── README.md                 # This file
+├── napkin-prototype.jpg      # Original whiteboard sketch
 ├── RAF-pseudocode.ts         # Ground truth algorithm (DO NOT MODIFY)
 ├── RAF-project-spec.md       # Technical specification
-├── RAF-diagram.md            # Mermaid diagrams
+├── RAF-complete-flow.md      # Complete algorithm flow with all agent clusters
+├── RAF-diagram.md            # Additional Mermaid diagrams
 ├── AGENTS.md                 # AI agent instructions
 └── papers/                   # Reference papers
 ```
