@@ -12,7 +12,7 @@ A recursive agent orchestration framework for any horizon-length agentic task. R
 
 - **Decision aggregation:** Critical decisions are voted on by agent juries. When decomposing a task, a consortium generates proposals, then a jury votes on the best option.
 
-- **Strong output format enforcement:** All agent outputs conform to JSON schemas. This enables hard-coded validation logic and provides a reliable signal for detecting bad responses.
+- **Strong output format enforcement:** All agent outputs conform to JSON schemas. This enables hard-coded validation logic and provides a reliable signal for detecting bad responses. Require strictly structured output JSON for all LLMs in the system to easily parse out tool responses and use hard-coded logic as much as possible.
 
 ## Core Architecture
 
@@ -109,12 +109,15 @@ Extends AgentCluster. Takes a list of options, has all agents vote, then aggrega
 
 3. Agent executes the winning design
 
-4. AgentConsortium analyzes execution result
+4. AgentJury votes on base agent success (separate from analysis)
+   - Binary success/failure determination based on execution output
+
+5. AgentConsortium analyzes execution result
    - Returns {success: boolean, info: string}
 
-5. AgentJury votes on best analysis
+6. AgentJury votes on best analysis
 
-6. Return nodeResult with analysis
+7. Return nodeResult with analysis
 ```
 
 ### Recursive Case Flow
@@ -180,6 +183,10 @@ Key tunable parameters in jury/consortium configs:
 }
 ```
 
+### Context Window Optimization
+
+Each node should use an ideal context window size—large enough to contain necessary information but small enough to maintain signal-to-noise ratio. Determining optimal context windows per node type is an open research question that should be tuned empirically.
+
 ## Entry Point
 
 The root RafNode is instantiated with the initial task context and no parent. It has no dependencies to wait for and immediately proceeds to the base case vote.
@@ -197,3 +204,32 @@ const result = await root.call()
 - All outputs are validated against JSON schemas before use
 - Invalid outputs are filtered, not retried (consortium handles diversity)
 - Circular dependency detection prevents deadlocks in sibling plans
+
+## Benchmarking Variables
+
+Independent variables for evaluating system performance:
+
+- **Agent counts:** Number of voters and consortium agents per decision point
+- **Compute allocation:** Total compute and compute diversity across voters and consortium members
+- **Signal variability:** Diversity of signals/perspectives from consortium members
+- **System prompt design:** Whether consortium members and voters include evaluation reasoning in their prompts (with or without going into eval on each step)
+
+## Future Work
+
+Potential post-MVP features and optimizations:
+
+- **Voter trust tracking:** Track and weight voter reliability over time based on historical accuracy
+- **Observable WAAS workspaces:** Provide visibility into agent workspace states for debugging and monitoring
+- **Context clustering:** Cluster similar contexts for optimal instance reuse and routing
+- **Prompt caching optimization:** Aggressive prompt caching for cost reduction in consortium calls and retries
+- **MCTS RLtF:** Implement Monte Carlo Tree Search with Reinforcement Learning from Feedback for navigating larger proof/task stacks
+
+### Tech Stack Considerations
+
+- **LiteLLM:** Model abstraction layer (already planned)
+- **V8/OS isolates:** Lightweight workspaces for agent execution
+- **Rust:** Performance-critical paths
+- **D3:** Visualization of execution trees and voting patterns
+- **Langchain → Langgraph:** Agent orchestration primitives
+- **Kubeflow:** ML pipeline orchestration for training/evaluation
+- **Temporal:** Durable workflow execution for long-running tasks
