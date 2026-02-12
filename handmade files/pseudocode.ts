@@ -73,6 +73,8 @@ const RECURSIVE_CASE_PLAN_CONSORTIUM_CONFIG: AgentConsortiumConfig<childNodePlan
 const RECURSIVE_CASE_PLAN_CONCAT_CONSORTIUM_CONFIG: AgentConsortiumConfig<childNodePlan[][]> = { max_temp: 0.5, min_temp: 0.1, size: 10, agents: [], context: "Perform a union operation on all the proposed plans into a final list of proposed plans. Merge any plans that are identical or nearly identical. If any two parts of a plan conflict/are contradictory, then they are seperate plans and should not be merged", format: {} } // format is list of parentPlan
 const RECURSIVE_CASE_PLAN_CONCAT_JURY_CONFIG: AgentJuryConfig<childNodePlan[][]> = { max_temp: 0.5, min_temp: 0.1, size: 10, agents: [], context: "Vote on which concatenated list of plans best represents all the proposed plans", options: [], format: {} as JSONSchema }
 const RECURSIVE_CASE_PLAN_JURY_CONFIG: AgentJuryConfig<childNodePlan[]> = { max_temp: 0.5, min_temp: 0.1, size: 10, agents: [], context: "Vote on which concatenated plan for breaking down this recursive case into next-smallest parts is the best", options: [], format: {} as JSONSchema }
+
+
 //etc.
 
 // The recursive function behind the RAF.

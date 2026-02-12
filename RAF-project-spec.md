@@ -16,17 +16,6 @@ A recursive agent orchestration framework for any horizon-length agentic task. R
 
 ## Core Architecture
 
-### Class Hierarchy
-
-```
-Agent<T>              — Single LLM instance with tools, output format, and model
-    ↓
-AgentCluster<T>       — Base class for groups of agents with shared context
-    ↓
-├── AgentConsortium<T> — Generates diverse proposals (no voting)
-└── AgentJury<T>       — Votes on options from a list
-```
-
 ### RafNode
 
 The recursive execution unit. Each RafNode:
@@ -37,14 +26,7 @@ The recursive execution unit. Each RafNode:
 
 #### RafNode State
 
-```typescript
-interface nodeResult {
-    name: string
-    success?: boolean
-    execSummary?: string     // Context for summarization and child node input
-    childExecutions: {[key: string]: nodeResult}
-}
-```
+Stores information about what point of execution the node currently is, how how its running went.
 
 #### RafNode Lifecycle
 
@@ -226,9 +208,9 @@ Potential post-MVP features and optimizations:
 
 ### Tech Stack Considerations
 
-- **LiteLLM:** Model abstraction layer (already planned)
+- **LiteLLM/LiteLLM.rs:** Model abstraction layer (already planned)
 - **V8/OS isolates:** Lightweight workspaces for agent execution
-- **Rust:** Performance-critical paths
+- **Rust/python:** Performance-critical paths
 - **D3:** Visualization of execution trees and voting patterns
 - **Langchain → Langgraph:** Agent orchestration primitives
 - **Kubeflow:** ML pipeline orchestration for training/evaluation
