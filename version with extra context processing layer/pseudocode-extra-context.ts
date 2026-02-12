@@ -47,6 +47,7 @@ type AnalysisResult = {
 }
 
 // Child plan spec is produced by an LLM (JSON-only).
+// After refinement, context should encode purpose, return info, and success condition.
 type ChildPlanSpec = {
     [key: string]: JSONValue
     name: string
@@ -95,6 +96,8 @@ interface RafConfig {
         planMergeConsortium: AgentClusterConfig
         planMergeJury: AgentJuryConfig
         planJury: AgentJuryConfig
+        nodeContextConsortium: AgentClusterConfig
+        nodeContextJury: AgentJuryConfig
     }
     analysis: {
         consortium: AgentClusterConfig
@@ -179,6 +182,24 @@ const RAF_DEFAULT_CONFIG: RafConfig = {
             baseContext: "Vote on the best final plan",
             options: [],
             outputSchema: { type: "array" },
+        },
+        nodeContextConsortium: {
+            minTemp: 0.1,
+            maxTemp: 0.5,
+            size: 10,
+            agents: [],
+            baseContext:
+                "Refine one child plan into a node-purpose spec. Keep name/dependsOn unchanged. Expand context to define purpose, required return info, and success condition using dependency refinements.",
+            outputSchema: { type: "object" },
+        },
+        nodeContextJury: {
+            minTemp: 0.1,
+            maxTemp: 0.5,
+            size: 10,
+            agents: [],
+            baseContext: "Vote on the best refined node-purpose plan",
+            options: [],
+            outputSchema: { type: "object" },
         },
     },
     analysis: {
@@ -330,6 +351,18 @@ const Validators = {
             }
         }
         return planLists
+    },
+
+    filterChildPlanSpecs(values: JSONValue[]): ChildPlanSpec[] {
+        const specs: ChildPlanSpec[] = []
+        for (const value of values) {
+            try {
+                specs.push(Validators.asChildPlanSpec(value))
+            } catch {
+                // ignore invalid
+            }
+        }
+        return specs
     },
 }
 
@@ -655,6 +688,30 @@ class RafNode {
         return { name: this.name, success: analysis.success, execSummary: analysis.info, childExecutions: {} }
     }
 
+    private orderPlansForExecution(plan: ChildPlanSpec[]): ChildPlanSpec[] {
+        const remaining = new Set(plan.map((item) => item.name))
+        const ordered: ChildPlanSpec[] = []
+        let progress = true
+
+        while (remaining.size > 0 && progress) {
+            progress = false
+            for (const item of plan) {
+                if (!remaining.has(item.name)) continue
+                const unmetDeps = item.dependsOn.filter((dep) => remaining.has(dep))
+                if (unmetDeps.length === 0) {
+                    ordered.push(item)
+                    remaining.delete(item.name)
+                    progress = true
+                }
+            }
+        }
+
+        if (ordered.length !== plan.length) {
+            return plan
+        }
+        return ordered
+    }
+
     private async executeRecursiveCase(): Promise<NodeResult> {
         const config = this.engine.getConfig()
         const validator = this.engine.getPlanValidator()
@@ -664,6 +721,8 @@ class RafNode {
         const planMergeConsortium = new AgentConsortium(config.recursiveCase.planMergeConsortium)
         const planMergeJury = new AgentJury(config.recursiveCase.planMergeJury)
         const planJury = new AgentJury(config.recursiveCase.planJury)
+        const nodeContextConsortium = new AgentConsortium(config.recursiveCase.nodeContextConsortium)
+        const nodeContextJury = new AgentJury(config.recursiveCase.nodeContextJury)
 
         const analysisConsortium = new AgentConsortium(config.analysis.consortium)
         const analysisJury = new AgentJury(config.analysis.jury)
@@ -690,11 +749,36 @@ class RafNode {
         const planValue = await planJury.doVoting()
         const plan = Validators.asChildPlanList(planValue)
 
+        const orderedPlans = this.orderPlansForExecution(plan)
+        const refinedPlanMap: { [name: string]: ChildPlanSpec } = {}
+        for (const childPlan of orderedPlans) {
+            const dependencyRefinements = childPlan.dependsOn
+                .map((dep) => refinedPlanMap[dep])
+                .filter((spec) => spec !== undefined)
+            const refinementContext = { plan: childPlan, dependencyRefinements }
+            await nodeContextConsortium.setContext(refinementContext)
+            const refinedCandidates = Validators.filterChildPlanSpecs(await nodeContextConsortium.call())
+            if (refinedCandidates.length === 0) {
+                throw new Error("No valid refined plan produced")
+            }
+
+            await nodeContextJury.setOptions(refinedCandidates)
+            await nodeContextJury.setContextWithOptions(refinementContext)
+            const refinedValue = await nodeContextJury.doVoting()
+            const refinedPlan = Validators.asChildPlanSpec(refinedValue)
+            refinedPlanMap[childPlan.name] = {
+                name: childPlan.name,
+                dependsOn: childPlan.dependsOn,
+                context: refinedPlan.context,
+            }
+        }
+
         const dependencyMap: { [name: string]: string[] } = {}
         for (const childPlan of plan) {
-            const resolvedContext = await contextResolver.resolve(childPlan.context)
+            const refinedPlan = refinedPlanMap[childPlan.name] ?? childPlan
+            const resolvedContext = await contextResolver.resolve(refinedPlan.context)
             this.children[childPlan.name] = this.engine.createChild(resolvedContext, this, childPlan.name)
-            dependencyMap[childPlan.name] = childPlan.dependsOn
+            dependencyMap[childPlan.name] = refinedPlan.dependsOn
         }
 
         const childPromises: { [name: string]: Promise<NodeResult> } = {}
@@ -752,3 +836,5 @@ class RafNode {
         return result
     }
 }
+
+export {}

@@ -11,142 +11,75 @@
 
 ![RAF Whiteboard Diagram](./whiteboard.jpeg)
 
-*Original whiteboard sketch from the design session*
+Original whiteboard sketch from the design session.
 
 ---
 
 ## What is RAF?
 
-RAF (Recursive Agent Framework) is a novel approach to AI agent orchestration that solves the fundamental problem of **context window limitations** in large language models.
-
-Instead of trying to fit an entire complex task into a single agent's context, RAF **recursively decomposes** tasks into smaller, manageable pieces—each with its own optimized context window. At every decision point, **multiple agents vote** to ensure robust, error-resistant execution.
-
-### The Core Insight
-
-Current agent frameworks fail on long-horizon tasks because:
-- Single agents accumulate noise in their context windows
-- No graceful handling of task complexity
-- Single points of failure at each decision
-
-RAF solves this with:
-- **Recursive decomposition** — Tasks break down until they're single-step executable
-- **Multi-agent voting** — Consortiums propose, juries decide
-- **Minimal context windows** — Each agent sees only what it needs
+RAF (Recursive Agent Framework) is a method for running complex, long-horizon tasks by breaking them into smaller parts and managing them with multiple collaborating agents. Instead of forcing a single agent to handle an entire task in one context window, RAF continuously decomposes work until each piece is small and well-defined.
 
 ---
 
-## Architecture
+## How it Works (High Level)
 
-```
-                    ┌─────────────┐
-                    │   RafNode   │
-                    │   (root)    │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │  Base Case  │
-                    │    Vote     │
-                    └──────┬──────┘
-                           │
-              ┌────────────┼────────────┐
-              │                         │
-       ┌──────▼──────┐          ┌───────▼───────┐
-       │  Base Case  │          │ Recursive Case│
-       │  (execute)  │          │ (decompose)   │
-       └─────────────┘          └───────┬───────┘
-                                        │
-                          ┌─────────────┼─────────────┐
-                          │             │             │
-                    ┌─────▼─────┐ ┌─────▼─────┐ ┌─────▼─────┐
-                    │  RafNode  │ │  RafNode  │ │  RafNode  │
-                    │  (child)  │ │  (child)  │ │  (child)  │
-                    └───────────┘ └───────────┘ └───────────┘
-```
+1. **Decide whether to execute or decompose.**
+   A proposal group suggests whether the task should be handled directly or broken down. A voting group makes the final choice.
 
-### Key Components
+2. **Direct execution path.**
+   If the task is small enough, the system designs an executor, runs the task, and separately evaluates success.
 
-| Component | Purpose |
-|-----------|---------|
-| **RafNode** | Recursive execution unit — decides base case or decompose |
-| **Agent** | Single LLM instance with tools, output schema, and model config |
-| **AgentConsortium** | Multiple agents generating diverse proposals |
-| **AgentJury** | Multiple agents voting on best option |
+3. **Decomposition path.**
+   If the task is too large, the system proposes multiple decomposition plans, merges similar plans, and selects a final plan.
 
-### Execution Flow
+4. **Extra context processing layer.**
+   Before any child task is launched, each child plan is refined in dependency order. This refinement clarifies:
+   - The purpose of the child task
+   - The specific information it must return
+   - The success condition for that child
 
-Every decision point uses the **Consortium → Jury** pattern:
+   Refinements incorporate the already-refined requirements of any dependencies.
 
-| Step | AgentConsortium | AgentJury |
-|------|-----------------|-----------|
-| **1. Base Case Decision** | Generate base/recursive proposals | Vote: base case or recursive? |
-| **2a. Agent Design** *(base case)* | Generate executor designs | Vote: best design? |
-| **2b. Execution** | — | Agent executes task |
-| **2c. Success Vote** | Analyze execution output | Vote: did it succeed? |
-| **3a. Plan Generation** *(recursive)* | Generate decomposition plans | — |
-| **3b. Plan Merge** | Merge similar plans | Vote: best merge? |
-| **3c. Plan Selection** | — | Vote: best final plan? |
-| **3d. Child Execution** | — | Spawn RafNodes, execute in parallel |
-| **3e. Success Vote** | Analyze combined results | Vote: overall success? |
-
-**Key design decision:** Success determination is a *separate* consortium→jury vote after execution, not part of execution itself.
-
-See [RAF-complete-flow.md](./RAF-complete-flow.md) for the full diagram.
+5. **Parallel child execution with dependencies.**
+   Children without dependencies start immediately; others wait for required siblings. Results are merged and evaluated at the parent level.
 
 ---
 
-## Design Principles
+## Core Principles
 
-1. **Signal-to-noise optimization** — Each agent handles minimal noise, maximum signal
-2. **Recursion** — Break down until single-step executable
-3. **Multi-model diversity** — Heterogeneous models improve robustness
-4. **Decision aggregation** — Votes over single decisions
-5. **Strong typing** — JSON schemas enforce output structure
-
----
-
-## Repository Structure
-
-```
-raf-plan/
-├── README.md                 # This file
-├── whiteboard.jpeg           # Original whiteboard sketch
-├── RAF-pseudocode.ts         # Ground truth algorithm (DO NOT MODIFY)
-├── RAF-project-spec.md       # Technical specification
-├── RAF-complete-flow.md      # Complete algorithm flow with all agent clusters
-├── RAF-diagram.md            # Additional Mermaid diagrams
-├── AGENTS.md                 # AI agent instructions
-└── papers/                   # Reference papers
-```
+- **Recursive decomposition** — reduce complexity until tasks are single-step
+- **Multi-agent decision making** — proposals and votes at critical points
+- **Context discipline** — each agent sees only the context it needs
+- **Independent evaluation** — success is judged separately from execution
+- **Structured outputs** — decisions and results are consistently shaped
 
 ---
 
-## Diagrams
+## Repository Layout
 
-See [RAF-diagram.md](./RAF-diagram.md) for detailed Mermaid diagrams:
-- Main execution flow
-- Class hierarchy
-- Sibling dependency model
-- Consortium-Jury pattern
-- Recursive tree structure
+- `version with extra context processing layer/`
+  - `pseudocode-extra-context.ts` — the current pseudocode for the extra context refinement layer
+- `version with error handling/`
+  - *(empty for now)*
+- `RAF-complete-flow.md` — full flow described in natural language
+- `RAF-diagram.md` — conceptual views, also in natural language
+- `RAF-project-spec.md` — technical specification
+- `handmade files/` — handwritten reference materials (do not edit)
+- `papers/` — reference papers
+- `whiteboard.jpeg` — original whiteboard sketch
+- `AGENTS.md` — AI agent instructions
 
 ---
 
-## Prior Art & Differentiation
+## Diagrams and Explanations
 
-RAF differs from existing frameworks:
-
-| Framework | Limitation | RAF Solution |
-|-----------|-----------|--------------|
-| AutoGPT, BabyAGI | Single-agent loops, context bloat | Recursive decomposition |
-| CrewAI, AutoGen | Multi-agent but no recursive structure | Hierarchical + recursive |
-| Tree of Thoughts | Search-based, not execution | Execution-focused with voting |
-| LangChain | Orchestration without decomposition | Automatic task breakdown |
+See `RAF-complete-flow.md` and `RAF-diagram.md` for narrative descriptions of the system’s flow and structure.
 
 ---
 
 ## License
 
-Patent Pending. All rights reserved.
+Patent pending. All rights reserved.
 
 ---
 
@@ -157,4 +90,4 @@ Vanderbilt University, Class of 2028
 
 ---
 
-*This framework is under active development as part of CS 3892 (Cloud Computing) at Vanderbilt University.*
+This framework is under active development as part of CS 3892 (Cloud Computing) at Vanderbilt University.

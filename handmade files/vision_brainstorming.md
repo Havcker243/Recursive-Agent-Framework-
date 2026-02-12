@@ -54,6 +54,16 @@ Memories can be paralellized. For example, a list is no longer sequential, in ca
 
 I can think of how tree-like memories could easily be created: the memorizer LLM's output layer is used. Tokens relate to each other in definition and contextual meaning, and this is used to define their position in high-dimensional semantic space. One memory will stick together positionally, but the position of tokens related to each other is used to determine sequentialism (this makes a time dimension nescessary. Time is not nescessarily real-world time, could just be sequentialism). Tree memories can be created when the memorizer output LLM is trying to remember something. Relational position in sematic space will be the integral of meaning of the train of thought. The offset between each individual token is its isolated meaning, meaning the isolated definition of any set of tokens representing a word or phrase is the definite integral of that string of tokens with the bounds of the integral and the bounds of the string of tokens. For this to work, there needs to be some tree granularity factor, and compute will scale really poorly relative to tree granularity. Tree granuarity would be the threshhold of uncertainty when the memorizer llm is generating new tokens for a split in the memory tree. A very low threshhold would lead to rapidly expanding trees that would lead to thousands of paralell llm calls. A threshhold too low would lead to degenerate trees. Better approach would be a desired tree complexity, and the threshhold would be modulated to produce the desired complexity. Re-merging branches that converge is an even more difficult problem, but also wouldn't make sense to happen as often a splitting. There has to be a re-merging threshhold as well as a tree granularity threshhold. 
 
+typed edges: leads to, is an example of, contradicts, etc
+What if edges were multidimensional and could have meanings?
+
+instead of storing a paragraph as text its a linked list of tokens which each has their own semantic vector. These linked lists, when plotted in high dimensional semantically encoded space, would look like winding and squiggling snakes, and their relative position would encode meaning. Then, edges between strings, which could contain multiple dimensions so that edges can encode semantic meaning as well, can connect the two without strongly typed definitions
+
+the advantage that the linked list approach presents is that when searching through a document, a match can be found for one idea in the document thats just a segment of the linked list. Instead of having to chunk documents, documents are already dynamically chunkable at read time
+
+for this point: You must store the full context window to reproduce meaning.
+
+The starting point of any memory would be based on the context window of the model that stored the memory. As the recursive agent framework runs, its runtime graph can also be represented as a tree in high d space. every child node's position relative to its parent would encode its absolute meaning but its absolute position in the high-d memory brain gives context to its meaning.
 
 # Computer Use
 

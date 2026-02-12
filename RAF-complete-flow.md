@@ -1,138 +1,49 @@
-# RAF Complete Algorithm Flow
+# RAF Complete Flow (Natural Language)
 
-This diagram shows all steps and agent clusters in the Recursive Agent Framework.
+This document describes the full behavior of the Recursive Agent Framework in plain language. It focuses on decisions, responsibilities, and information flow rather than implementation details.
 
-## Complete Flow Diagram
+## End-to-End Flow
 
-```mermaid
-flowchart TB
-    subgraph input ["INPUT"]
-        TASK[/"Task + Context"/]
-    end
+1. **Intake**
+   - A task arrives with any supporting context.
+   - If this node depends on siblings, their completed results are folded into the context before any decision is made.
 
-    subgraph baseDecision ["1. BASE CASE DECISION"]
-        direction TB
-        BC_CON["🔷 AgentConsortium<br/><i>Generate base/recursive proposals</i>"]
-        BC_JURY["🗳️ AgentJury<br/><i>Vote: Base Case or Recursive?</i>"]
-        BC_CON --> BC_JURY
-    end
+2. **Base vs. Recursive Decision**
+   - A small group of independent agents proposes whether the task should be handled directly or decomposed.
+   - A separate voting group selects the final decision.
 
-    subgraph baseCase ["2. BASE CASE EXECUTION"]
-        direction TB
-        
-        subgraph design ["2a. Agent Design"]
-            DESIGN_CON["🔷 AgentConsortium<br/><i>Generate executor agent designs</i><br/>(tools, context, output format)"]
-            DESIGN_JURY["🗳️ AgentJury<br/><i>Vote: Best agent design?</i>"]
-            DESIGN_CON --> DESIGN_JURY
-        end
-        
-        subgraph execute ["2b. Execution"]
-            EXECUTOR["⚡ Agent<br/><i>Execute single-step task</i>"]
-        end
-        
-        subgraph success ["2c. Success Decision"]
-            SUCCESS_CON["🔷 AgentConsortium<br/><i>Analyze execution output</i>"]
-            SUCCESS_JURY["🗳️ AgentJury<br/><i>Vote: Did it succeed?</i>"]
-            SUCCESS_CON --> SUCCESS_JURY
-        end
-        
-        design --> execute --> success
-    end
+3. **If the task is handled directly (base case)**
+   - **Design step:** Multiple agents propose how to execute the task, including tools, expected output shape, and any constraints.
+   - **Selection:** A voting group picks the strongest proposal.
+   - **Execution:** A single executor runs the task.
+   - **Evaluation:** A separate analysis group judges success, and a voting group selects the final assessment.
 
-    subgraph recursiveCase ["3. RECURSIVE CASE EXECUTION"]
-        direction TB
-        
-        subgraph planning ["3a. Plan Generation"]
-            PLAN_CON["🔷 AgentConsortium<br/><i>Generate decomposition plans</i><br/>(child tasks + dependencies)"]
-        end
-        
-        subgraph filtering ["3b. Plan Processing"]
-            FILTER["🔍 Filter<br/><i>Remove circular dependencies</i>"]
-            CONCAT_CON["🔷 AgentConsortium<br/><i>Merge similar plans</i>"]
-            CONCAT_JURY["🗳️ AgentJury<br/><i>Vote: Best merge?</i>"]
-            FILTER --> CONCAT_CON --> CONCAT_JURY
-        end
-        
-        subgraph selection ["3c. Plan Selection"]
-            PLAN_JURY["🗳️ AgentJury<br/><i>Vote: Best final plan?</i>"]
-        end
-        
-        subgraph spawn ["3d. Child Execution"]
-            SPAWN["🌱 Spawn Child RafNodes<br/><i>Configure sibling dependencies</i>"]
-            PARALLEL["⚡ Execute in Parallel<br/><i>Children wait on dependencies</i>"]
-            SPAWN --> PARALLEL
-        end
-        
-        subgraph recSuccess ["3e. Combined Success Decision"]
-            REC_SUCCESS_CON["🔷 AgentConsortium<br/><i>Analyze combined child results</i>"]
-            REC_SUCCESS_JURY["🗳️ AgentJury<br/><i>Vote: Overall success?</i>"]
-            REC_SUCCESS_CON --> REC_SUCCESS_JURY
-        end
-        
-        planning --> filtering --> selection --> spawn --> recSuccess
-    end
+4. **If the task is decomposed (recursive case)**
+   - **Plan generation:** Multiple agents propose ways to split the task into child tasks with dependencies.
+   - **Plan processing:** Invalid cycles are removed. Similar plans are merged, then a voting group selects the best merged set.
+   - **Plan selection:** A voting group chooses the final plan to execute.
+   - **Context refinement layer (extra context engineering):**
+     - Child plans are processed in dependency order.
+     - Each child plan is refined by a proposal group to clarify its purpose, the information it must return, and its success condition.
+     - The refined plan for a child includes insights from already-refined dependencies.
+     - A voting group selects the best refined version for each child.
+   - **Child execution:** Children are spawned with the refined context. Each child waits for any required dependencies, then runs in parallel where possible.
+   - **Combined evaluation:** Child summaries are aggregated and judged by an analysis group, then finalized by a voting group.
 
-    subgraph output ["OUTPUT"]
-        RESULT[/"nodeResult<br/>{success, execSummary, childExecutions}"/]
-    end
+5. **Output**
+   - The node returns a success/failure decision, an execution summary, and the collection of child results.
 
-    TASK --> baseDecision
-    BC_JURY -->|"Base Case"| baseCase
-    BC_JURY -->|"Recursive"| recursiveCase
-    SUCCESS_JURY --> RESULT
-    REC_SUCCESS_JURY --> RESULT
-    
-    %% Recursive arrow
-    PARALLEL -.->|"Each child is a RafNode"| baseDecision
+## The Proposal → Vote Pattern
 
-    style BC_CON fill:#fff3e0
-    style DESIGN_CON fill:#fff3e0
-    style SUCCESS_CON fill:#fff3e0
-    style PLAN_CON fill:#fff3e0
-    style CONCAT_CON fill:#fff3e0
-    style REC_SUCCESS_CON fill:#fff3e0
-    
-    style BC_JURY fill:#e3f2fd
-    style DESIGN_JURY fill:#e3f2fd
-    style SUCCESS_JURY fill:#e3f2fd
-    style CONCAT_JURY fill:#e3f2fd
-    style PLAN_JURY fill:#e3f2fd
-    style REC_SUCCESS_JURY fill:#e3f2fd
-    
-    style EXECUTOR fill:#e8f5e9
-```
+At every decision point, RAF uses a two-stage pattern:
+- A **proposal group** generates diverse options.
+- A **voting group** selects the best option.
 
-## Agent Cluster Summary
+This reduces single-agent bias and improves robustness.
 
-| Step | Cluster Type | Purpose |
-|------|-------------|---------|
-| 1 | Consortium → Jury | Decide base case vs recursive |
-| 2a | Consortium → Jury | Design executor agent |
-| 2b | Agent | Execute task |
-| 2c | Consortium → Jury | **Vote on success** (separate step) |
-| 3a | Consortium | Generate decomposition plans |
-| 3b | Consortium → Jury | Merge and select best plan merge |
-| 3c | Jury | Select final plan |
-| 3d | RafNodes | Spawn and execute children |
-| 3e | Consortium → Jury | **Vote on combined success** |
+## Why the Success Check is Separate
 
-## Legend
-
-- 🔷 **AgentConsortium** (orange) — Multiple agents generating diverse proposals
-- 🗳️ **AgentJury** (blue) — Multiple agents voting on best option  
-- ⚡ **Agent/Execution** (green) — Single agent or parallel execution
-- 🔍 **Filter** — Deterministic processing (no LLM)
-
-## Key Design Decision: Separate Success Vote
-
-The success determination is explicitly separated from execution:
-
-1. **Executor runs** → produces raw output
-2. **Success Consortium** → analyzes output, generates success assessments
-3. **Success Jury** → votes on whether execution succeeded
-
-This separation allows:
-- Executor to focus purely on task completion
-- Success criteria to be evaluated by fresh context
-- Multiple perspectives on what constitutes success
-- Clear audit trail of success reasoning
+Execution and success evaluation are intentionally split:
+- Executors focus on producing results.
+- Evaluators judge those results with fresh context.
+- This separation yields clearer accountability and more reliable success decisions.
