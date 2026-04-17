@@ -1,179 +1,269 @@
-# RAF: Recursive Agent Framework
+# Recursive Agent Framework
 
-> A recursive multi-agent orchestration framework for horizon-length agentic tasks.
-
-**Author:** Oludolapo Adegbesan  
-**Institution:** Fisk University, Class of 2026  
-**Status:** Research & Development  
+**Author:** Oludolapo Adegbesan
+**Institution:** Fisk University, Class of 2026
+**Status:** Active Research and Development
 **Patent:** Provisional application pending
 
 ---
 
-## Project Vision
+## What Is This?
 
-The Recursive Agent Framework (RAF) was built around a simple but powerful idea: **no single AI agent should be forced to solve a problem too large for it to handle well.**
+The Recursive Agent Framework (RAF) is a system for orchestrating artificial intelligence agents to solve tasks of any complexity and length. It is the foundation of a larger platform called **Computer**: a universal substrate for recursive AI agent orchestration with experiential memory.
 
-Most AI systems today assign a task to one agent and let it figure things out. When tasks are complex — spanning many steps, requiring diverse reasoning, or exceeding a model's effective attention span — this approach produces shallow, inconsistent results.
+Most AI systems today assign a task to a single model and let it reason through everything at once. This works for simple tasks but breaks down quickly when tasks are long, multi-step, or require different kinds of reasoning at different stages. A single agent has a limited context window, a single perspective, and no memory of what it has done before.
 
-RAF solves this by treating task execution like a recursive algorithm: **break the problem down until each piece is small and clear, then solve each piece with a focused agent.** Decisions about how to break things down are made by committees of agents that propose and vote — not by any single model acting alone.
+RAF solves this with a different approach: **divide and conquer, with committees at every decision point.** Complex tasks are recursively broken down into smaller pieces until each piece is simple enough to execute directly. Every critical decision along the way is made not by one agent, but by a group of agents that propose options and vote on the best one.
 
-The end goal is a system that can reliably handle tasks of **any complexity or length** by combining recursive decomposition, multi-agent decision-making, and structured output validation.
-
----
-
-## Project Goals
-
-1. **Enable long-horizon task execution** — tackle tasks that would exceed any single model's context window or reasoning capacity.
-2. **Reduce single-point-of-failure risk** — replace single-agent decisions with consortium proposals and jury voting at every critical step.
-3. **Maximize signal-to-noise ratio** — each agent receives only the context it needs, nothing more.
-4. **Enforce structured outputs** — all agent responses are validated against JSON schemas, making the system predictable and debuggable.
-5. **Support model diversity** — the framework is model-agnostic; mixing different LLMs improves epistemic diversity and robustness.
-6. **Build toward an open research benchmark** — expose tunable parameters (agent count, compute allocation, prompt design) so the system can be empirically evaluated and improved.
+The result is a system that can take on problems no single model could handle, execute them with multi-agent checks at every step, and grow more capable over time as memory and substrate layers are added.
 
 ---
 
-## Original Design Sketch
+## Why Are We Building This?
 
-![RAF Whiteboard Diagram](./whiteboard.jpeg)
+Current AI agent frameworks have three fundamental problems.
 
-The whiteboard where it all started.
+**The context ceiling.** Every model has a limit on how much it can process at once. Long or complex tasks hit that ceiling, forcing the model to either truncate information or hallucinate continuity. There is no principled mechanism for handling tasks that exceed what any one model can hold.
+
+**Single-agent fragility.** When one model makes every decision, its biases, blind spots, and errors compound. There is no check on bad reasoning, no diversity of perspective, and no separation between the agent that does the work and the agent that judges whether it was done correctly.
+
+**No persistent cognition.** Agents forget everything between sessions. They cannot learn from experience, build up institutional knowledge, or carry context from one task into another. Every run starts from zero.
+
+RAF addresses the first two problems today. The memory system and substrate layers address the third. Together, they form **Computer**: a machine for sustained, recursive, multi-agent thought.
 
 ---
 
 ## How It Works
 
-### The Big Picture
+### The Core Idea
 
-When RAF receives a task, it runs through this loop:
+When a task arrives, it enters a **RafNode**, the fundamental unit of execution. The node faces one question: is this task small enough to solve directly, or does it need to be broken down first?
 
-1. **Should this be solved directly or broken down?**
-   A group of agents (a *Consortium*) proposes options. A *Jury* votes on the answer.
-
-2. **If small enough — execute directly.**
-   Agents design a focused executor, run it, then separately evaluate whether it succeeded.
-
-3. **If too large — decompose.**
-   Agents propose decomposition plans, similar plans are merged, and the Jury votes on the final plan. Child tasks are spawned and run in parallel, respecting any inter-task dependencies.
-
-4. **Children run recursively.**
-   Each child task goes through the same process. This continues until every leaf task is simple enough to execute directly.
-
-5. **Results bubble back up.**
-   Child results are collected, analyzed by a Consortium, and voted on by a Jury before being returned to the parent.
-
----
-
-### Core Components
-
-#### `RafNode` — The Recursive Unit
-Each node represents one task. It decides its own execution path (base case vs. recursive), manages its children, and returns a structured result.
+A group of agents (a Consortium) proposes an answer. A separate group (a Jury) votes on it. This two-stage pattern repeats at every decision point throughout the system.
 
 ```
-initialized → running → completed
-     ↓
-  base_case_vote()  →  AgentJury decides
-     ↓
-  ├── base_case()       → design agent → execute → analyze
-  └── recursive_case()  → plan children → spawn RafNodes → collect results
+Task arrives
+     |
+     v
+[Consortium proposes: execute or decompose?]
+[Jury votes on decision]
+     |
+     +-------> BASE CASE (small enough to execute directly)
+     |              |
+     |         [Consortium proposes executor designs]
+     |         [Jury selects best design]
+     |         [Executor runs the task]
+     |         [Jury evaluates success]
+     |              |
+     |         Return result
+     |
+     +-------> RECURSIVE CASE (too complex, must decompose)
+                    |
+               [Consortium proposes decomposition plans]
+               [Invalid plans filtered. Similar plans merged.]
+               [Jury selects final plan]
+               [Each child context refined in dependency order]
+               [Children execute in parallel, respecting dependencies]
+               [Consortium analyzes combined results]
+               [Jury evaluates overall success]
+                    |
+               Return result
 ```
 
-#### `AgentConsortium` — Proposal Generator
-Runs multiple agents in parallel to generate diverse proposals. Filters out any responses that fail schema validation.
+### Proposal and Vote
 
-#### `AgentJury` — Decision Maker
-Takes a list of options, collects votes from all jury agents, and aggregates them to select the best option. Uses winner-takes-all voting (with more sophisticated methods planned).
+Every critical decision follows the same two-stage pattern. A **Consortium** runs multiple agents in parallel to generate diverse proposals. An **AgentJury** collects votes from a separate set of agents and aggregates them to select a winner.
 
-#### `Agent` — Single LLM Instance
-One model call, configured with a specific context, tools, output schema, and model selection.
-
----
+This separation matters. The agents proposing options and the agents judging them are distinct. The executor that runs a task and the evaluator that judges its success are distinct. This reduces bias, catches errors, and produces more reliable decisions than any single model acting alone.
 
 ### Sibling Dependencies
 
-Child nodes can depend on each other's output:
+When a task is decomposed into children, those children can depend on each other. A child with dependencies waits for its siblings to finish, receives their results as additional context, and only then proceeds. Children without dependencies run immediately in parallel.
 
-```typescript
-interface childNodePlan {
-    context: ModelInput
-    name: string
-    dependsOn: string[]   // wait for these siblings before starting
-}
+```
+Parent Task
+   |
+   +-- Child A (no dependencies)         runs immediately
+   +-- Child B (depends on A)            waits for A
+   +-- Child C (depends on A)            waits for A
+   +-- Child D (depends on B and C)      waits for B and C
 ```
 
-Children without dependencies start immediately. Children with dependencies wait for their siblings, receive their results as additional context, then proceed.
+### Context Refinement Layer
+
+Before any child task launches, each child plan is refined in dependency order. A Consortium proposes a refined version of each child's context, clarifying its exact purpose, what information it must return, and what success looks like. A Jury selects the best refinement. Children with dependencies have their refinements informed by the already-refined contexts of what they depend on.
+
+This ensures every child starts with precisely the context it needs and nothing more.
 
 ---
 
-## Design Principles
+## Architecture
 
-| Principle | What It Means |
+The full system is built in three layers. The first is implemented. The second and third are designed and in development.
+
+### Layer 1: RAF (Recursive Agent Framework)
+
+The orchestration brain. Handles task decomposition, multi-agent decision-making, sibling dependencies, and context refinement. This layer is the core of what is built today.
+
+**Components:**
+
+| Component | Role |
 |---|---|
-| Recursive decomposition | Reduce complexity until tasks are single-step |
-| Multi-agent decision making | Proposals and votes at every critical choice |
-| Context discipline | Each agent sees only what it needs |
-| Independent evaluation | Success is judged separately from execution |
-| Structured outputs | All decisions and results conform to JSON schemas |
-| Model diversity | Different models improve collective reasoning |
+| RafNode | Recursive execution unit. One per task. Decides and runs. |
+| AgentConsortium | Runs N agents in parallel to generate diverse proposals. |
+| AgentJury | Collects votes from N agents and aggregates to a winner. |
+| LLM Adapters | Provider-agnostic interface for OpenRouter, Claude, Gemini, and others. |
+| FastAPI Server | HTTP and WebSocket API for running and observing tasks. |
+| React Frontend | Web interface for launching runs and streaming results. |
+
+### Layer 2: Experiential Memory System
+
+The cognitive continuity layer. Agents do not just store facts; they store experiences: what they were doing when they learned something, what preceded it, what followed, and how significant it was.
+
+Memory is stored as a vector graph database where nodes are high-dimensional vectors and edges are typed relationships (temporal, causal, associative, hierarchical, contradictory, experiential). Retrieval is position-relative: the same memory has different relevance depending on where in the execution graph the query originates, analogous to variable scoping in programming languages.
+
+An always-on Observer watches all model IO across the system, extracts memories with full experiential context, and writes them into the graph. A pre-turn Injector retrieves relevant memories before each LLM call and composes them into the context window.
+
+The memory graph syncs bidirectionally with an Obsidian vault, making it human-readable, editable, and git-versionable.
+
+**Status:** Designed. Research complete. Implementation not yet started.
+
+### Layer 3: Universal Substrate
+
+The execution infrastructure. A Rust runtime where everything in the system is a node with typed input and output ports. Nodes communicate via a typed event bus. Ports speak HTTP, MCP, native Rust, or WebSocket. The substrate can be compiled to a single machine, a CUDA cluster, distributed cloud, or a static Rust binary.
+
+This layer makes the system fast, portable, and observable. The event bus drives the real-time UI: execution trees lighting up as nodes run, token streams from individual agents, consortium proposals forming in parallel, and the memory graph growing as the system works.
+
+**Status:** Designed. Implementation not yet started.
+
+---
+
+## Project Vision
+
+The long-term vision is a system called **Computer**: a universal substrate for recursive AI agent orchestration with experiential memory.
+
+The name is intentional. This is not a chatbot wrapper, a framework convenience layer, or an automation tool. It is a programmable machine for thought. A substrate on which cognitive architectures are built. Something closer to what J.C.R. Licklider described in 1960 in "Man-Computer Symbiosis": a system where humans communicate intent and goals, and the machine figures out procedures and details.
+
+The design is built on a set of core principles:
+
+**Signal-to-noise optimization.** Each agent handles as little noise and as much signal as possible. Context windows are minimized to only what is necessary for the current decision or execution.
+
+**Recursion over monoliths.** No context window should be used for something that would benefit from being split. Tasks are broken into minimum-viable units of work.
+
+**Multi-model diversity.** The system improves with more model diversity. Using different models for different decisions introduces epistemic diversity and enables mixture-of-experts reasoning.
+
+**Decision aggregation.** Critical decisions are voted on. Proposals come from one group. Votes come from another. No single model makes a unilateral choice.
+
+**Memory is experiential.** Agents do not just store what happened. They store what they were doing when it happened, what preceded it, what followed, and how significant it was. Retrieval is shaped by where in the execution graph the query comes from.
+
+**Everything is a node.** LLM calls, tool invocations, memory reads and writes, context composition, UI rendering: all are nodes in the substrate with typed ports. Nodes connect to each other via the event bus.
+
+---
+
+## Goals
+
+1. Enable reliable execution of tasks of any complexity or length by decomposing them recursively until each piece is individually solvable.
+
+2. Replace single-agent decision-making with multi-agent proposal and vote at every critical step, reducing bias and improving robustness.
+
+3. Give agents persistent cognition across sessions through an experiential memory system that encodes not just facts but the context in which those facts were learned.
+
+4. Build a substrate that is observable in real-time, where every decision, token, proposal, and memory write is visible and inspectable.
+
+5. Create an open research artifact with tunable parameters (agent count, model diversity, compute allocation, prompt design) that can be benchmarked and improved empirically.
+
+6. Produce a system general enough to serve as infrastructure: something others can fork, extend, and build cognitive architectures on top of.
+
+---
+
+## Current State
+
+### What Is Built
+
+| Component | Status |
+|---|---|
+| Recursive task decomposition (RafNode) | Complete |
+| AgentConsortium (multi-agent proposals) | Complete |
+| AgentJury (multi-agent voting) | Complete |
+| Sibling dependency execution | Complete |
+| JSON schema output validation | Complete |
+| Context refinement layer (pseudocode) | Complete |
+| FastAPI server with WebSocket streaming | Complete |
+| React and Vite web frontend | Complete |
+| OpenRouter and Mock LLM adapters | Complete |
+| Additional adapters (Claude, DeepSeek, Groq, HuggingFace) | Written, not yet wired |
+
+### What Remains
+
+| Component | Status |
+|---|---|
+| Experiential memory system | Designed, not yet implemented |
+| Vector graph database integration | Not started |
+| Position-relative memory retrieval | Not started |
+| Always-on Observer for memory formation | Not started |
+| Pre-turn memory Injector | Not started |
+| Obsidian vault sync layer | Not started |
+| Dynamic context window manager | Not started |
+| Rust substrate runtime | Not started |
+| Typed port and event bus system | Not started |
+| Multi-target compilation | Not started |
+| Persistent run storage (database-backed) | Not started |
+| Full multi-provider adapter wiring | Not started |
+| Secret vault and tiered access control | Not started |
+| Real-time execution tree UI | Partial |
 
 ---
 
 ## Repository Layout
 
 ```
-raf/                          Python implementation of the framework
-  agents/                     Consortium and Jury agent classes
-  llm/                        LLM adapter layer (OpenRouter, Mock, and others)
-  cli/                        Command-line runner
-server/                       FastAPI backend for web-based runs
-web/                          React + Vite frontend
+raf/                    Core Python implementation of RAF
+  agents/               Consortium and Jury classes
+  llm/                  LLM adapter layer (OpenRouter, Mock, and others)
+  cli/                  Command-line runner
+
+server/                 FastAPI backend server
+
+web/                    React and Vite frontend
   src/
-    components/               UI components (PhysicsPanel, run visualizer, etc.)
-papers/                       Reference research papers
-handmade files/               Original handwritten design notes
-RAF-complete-flow.md          Full system flow in natural language
-RAF-diagram.md                Conceptual diagrams in natural language
-RAF-project-spec.md           Full technical specification
-whiteboard.jpeg               Original design sketch
-AGENTS.md                     Instructions for AI agents working in this repo
+    components/         UI components
+
+papers/                 Reference research papers
+handmade files/         Original handwritten design materials
+RAF-complete-flow.md    Full system flow in natural language
+RAF-diagram.md          Conceptual diagrams
+RAF-project-spec.md     Full technical specification
+whiteboard.jpeg         Original design sketch
+AGENTS.md               Instructions for AI agents working in this repo
 ```
 
 ---
 
-## Tech Stack
+## Technology Stack
 
 | Layer | Technology |
 |---|---|
-| Core framework | Python |
+| Orchestration framework | Python |
 | LLM abstraction | OpenRouter API (multi-model) |
 | API server | FastAPI |
-| Frontend | React + Vite + Tailwind CSS |
+| Frontend | React, Vite, Tailwind CSS |
 | Output validation | JSON Schema |
-| Planned: workflow durability | Temporal |
-| Planned: visualization | D3 |
-| Planned: performance paths | Rust |
+| Planned memory database | SurrealDB (native vector and graph in a single query) |
+| Planned substrate | Rust |
+| Planned visualization | D3 |
+| Planned human memory interface | Obsidian |
 
 ---
 
-## Future Work
+## Research Foundations
 
-- **Voter trust tracking** — weight voters by historical accuracy over time
-- **MCTS + RLtF** — Monte Carlo Tree Search with Reinforcement Learning from Feedback for navigating large task trees
-- **Context clustering** — route similar contexts to shared agent instances for cost efficiency
-- **Aggressive prompt caching** — reduce API costs across consortium retries
-- **Observable agent workspaces** — real-time visibility into what each agent is doing
-- **Persistent run storage** — database-backed runs so results survive server restarts
-- **Full multi-provider support** — fully integrate Claude, DeepSeek, Groq, and HuggingFace adapters
+This project draws from several fields.
 
----
+**Cognitive science.** Tulving's distinction between semantic memory (knowing facts) and episodic memory (remembering experiences) informs the memory system design. Anderson's ACT-R activation model, Howard and Kahana's Temporal Context Model, and DeepMind's MERLIN architecture all contribute to how memory formation and retrieval are designed.
 
-## Benchmarking Variables
+**Computer science.** Relative memory space is directly analogous to lexical variable scoping. Capability-based security models inform the tiered secret vault. Monte Carlo Tree Search informs tree-shaped memory formation at points of uncertainty.
 
-These parameters can be tuned to evaluate and improve system performance:
-
-- **Agent counts** — number of consortium members and jury voters per decision point
-- **Compute allocation** — total compute and diversity across agents
-- **Signal variability** — epistemic diversity from using different model families
-- **System prompt design** — whether agents include evaluation reasoning in their prompts
+**Recent AI research.** Pink et al. (2025) on episodic memory for long-term LLM agents, A-MEM (NeurIPS 2025) on Zettelkasten-style agent memory, Zep (2025) on temporal knowledge graphs, and MemGPT (2023) on virtual context management all contribute to the memory system direction.
 
 ---
 
@@ -185,7 +275,7 @@ Patent pending. All rights reserved.
 
 ## Author
 
-**Oludolapo Adegbesan**  
+**Oludolapo Adegbesan**
 Fisk University, Class of 2026
 
-This framework is an original research and engineering project developed independently as part of ongoing work in AI systems and multi-agent architectures.
+This is an original research and engineering project developed independently as part of ongoing work in AI systems, multi-agent architectures, and machine cognition.
