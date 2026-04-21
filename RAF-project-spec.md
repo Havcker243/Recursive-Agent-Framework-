@@ -200,6 +200,8 @@ Independent variables for evaluating system performance:
 
 Potential post-MVP features and optimizations:
 
+- **Strategy-additive model selection:** Currently applying a strategy replaces all slots with its preset values. A future improvement would let users apply a strategy as a base and then add more models on top without losing what the strategy configured. This would require a browsable, sorted model catalog (grouped by tier: leaf / mid / root, and sorted by capability, cost, and speed) so users can pick additions that fit the right role rather than typing raw model IDs. The "apply" action would become "apply as base" with individual slot additions layered on top, and the UI would show which slots came from the strategy vs. were manually added.
+
 - **Voter trust tracking:** Track and weight voter reliability over time based on historical accuracy
 - **Observable WAAS workspaces:** Provide visibility into agent workspace states for debugging and monitoring
 - **Context clustering:** Cluster similar contexts for optimal instance reuse and routing

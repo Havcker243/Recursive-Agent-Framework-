@@ -7,6 +7,12 @@
 
 ---
 
+![RAF execution graph UI](./image.png)
+
+*RAF web interface showing a live recursive execution graph, run timeline, and model activity.*
+
+---
+
 ## What Is This?
 
 The Recursive Agent Framework (RAF) is a system for orchestrating artificial intelligence agents to solve tasks of any complexity and length. It is the foundation of a larger platform called **Computer**: a universal substrate for recursive AI agent orchestration with experiential memory.
@@ -16,6 +22,10 @@ Most AI systems today assign a task to a single model and let it reason through 
 RAF solves this with a different approach: **divide and conquer, with committees at every decision point.** Complex tasks are recursively broken down into smaller pieces until each piece is simple enough to execute directly. Every critical decision along the way is made not by one agent, but by a group of agents that propose options and vote on the best one.
 
 The result is a system that can take on problems no single model could handle, execute them with multi-agent checks at every step, and grow more capable over time as memory and substrate layers are added.
+
+![RAF concept whiteboard](./whiteboard.jpeg)
+
+*Early whiteboard sketch of the recursive planning, voting, and base-case execution flow.*
 
 ---
 
@@ -135,6 +145,10 @@ The execution infrastructure. A Rust runtime where everything in the system is a
 This layer makes the system fast, portable, and observable. The event bus drives the real-time UI: execution trees lighting up as nodes run, token streams from individual agents, consortium proposals forming in parallel, and the memory graph growing as the system works.
 
 **Status:** Designed. Implementation not yet started.
+
+![RAF full implementation view](./Full%20impementation.png)
+
+*Expanded execution graph view with recursive nodes, consortium activity, jury decisions, and trace inspection.*
 
 ---
 

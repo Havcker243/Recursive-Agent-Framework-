@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(RAF_LLM=mock python:*)",
+      "Bash(npx tsc:*)",
+      "Bash(dir:*)",
+      "Bash(\"/c/Users/dolap/Desktop/Projects/RAF/raf-plan/.venv/Scripts/python.exe\":*)",
+      "WebFetch(domain:openrouter.ai)"
+    ],
+    "deny": [
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)"
+    ]
+  }
+}
