@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -96,10 +96,40 @@ class ApprovePlanRequest(BaseModel):
 app = FastAPI()
 manager = RunManager()
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allowed_origins() -> List[str]:
+    configured = os.getenv("RAF_ALLOWED_ORIGINS", "").strip()
+    if configured:
+        origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+        return origins or ["*"]
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
+def _require_run_token(run_id: str, access_token: Optional[str]) -> Any:
+    run_state = manager.get(run_id)
+    if not run_state:
+        raise HTTPException(status_code=404, detail="run not found")
+    if not access_token or access_token != run_state.access_token:
+        raise HTTPException(status_code=403, detail="invalid run token")
+    return run_state
+
+_origins = _allowed_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # wildcard origin + credentials is invalid per CORS spec
+    allow_origins=_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -118,6 +148,9 @@ def models() -> Dict[str, Any]:
 @app.post("/api/run")
 def run(request: RunRequest) -> Dict[str, Any]:
     provider = request.provider or request.adapter or "mock"
+    require_user_key = _env_flag("RAF_REQUIRE_USER_API_KEY", default=False)
+    if require_user_key and provider != "mock" and not (request.api_key or "").strip():
+        raise HTTPException(status_code=400, detail="A user API key is required for non-mock providers.")
     consortium_agents = (
         [{"provider": a.provider, "model": a.model} for a in request.consortium_agents]
         if request.consortium_agents else []
@@ -172,7 +205,7 @@ def run(request: RunRequest) -> Dict[str, Any]:
         root_agents=root_agents,
         api_key=request.api_key or None,
     )
-    return {"run_id": run_state.run_id}
+    return {"run_id": run_state.run_id, "access_token": run_state.access_token}
 
 
 @app.post("/api/demo/hanoi")
@@ -193,26 +226,22 @@ def demo_hanoi(request: DemoRequest) -> Dict[str, Any]:
             "system_prompt": request.system_prompt,
         },
     )
-    return {"run_id": run_state.run_id, "goal": goal}
+    return {"run_id": run_state.run_id, "goal": goal, "access_token": run_state.access_token}
 
 
 @app.get("/api/run/{run_id}")
-def run_status(run_id: str) -> Dict[str, Any]:
-    run_state = manager.get(run_id)
-    if not run_state:
-        return {"status": "not_found"}
+def run_status(run_id: str, x_run_token: str | None = Header(default=None)) -> Dict[str, Any]:
+    run_state = _require_run_token(run_id, x_run_token)
     return {"status": run_state.status, "result": run_state.result, "error": run_state.error}
 
 
 @app.get("/api/run/{run_id}/events")
-def run_events(run_id: str) -> Dict[str, Any]:
+def run_events(run_id: str, x_run_token: str | None = Header(default=None)) -> Dict[str, Any]:
     """Return all stored events for a run (up to _MAX_EVENTS_PER_RUN).
 
     Used by the frontend to replay a run's trace after a WebSocket disconnect.
     """
-    run_state = manager.get(run_id)
-    if not run_state:
-        return {"events": [], "status": "not_found"}
+    run_state = _require_run_token(run_id, x_run_token)
     return {
         "run_id": run_id,
         "status": run_state.status,
@@ -221,11 +250,9 @@ def run_events(run_id: str) -> Dict[str, Any]:
 
 
 @app.post("/api/run/{run_id}/approve_plan")
-def approve_plan(run_id: str, body: ApprovePlanRequest) -> Dict[str, Any]:
+def approve_plan(run_id: str, body: ApprovePlanRequest, x_run_token: str | None = Header(default=None)) -> Dict[str, Any]:
     """Unblock a run waiting for plan approval (with optionally edited children)."""
-    run_state = manager.get(run_id)
-    if not run_state:
-        return {"ok": False, "error": "run not found"}
+    run_state = _require_run_token(run_id, x_run_token)
     try:
         run_state.approve_plan(body.node_id, body.children)
     except ValueError as exc:
@@ -234,8 +261,9 @@ def approve_plan(run_id: str, body: ApprovePlanRequest) -> Dict[str, Any]:
 
 
 @app.post("/api/run/{run_id}/cancel")
-def cancel_run(run_id: str) -> Dict[str, Any]:
+def cancel_run(run_id: str, x_run_token: str | None = Header(default=None)) -> Dict[str, Any]:
     """Signal a running run to stop cooperatively."""
+    _require_run_token(run_id, x_run_token)
     ok = manager.cancel_run(run_id)
     return {"ok": ok}
 
@@ -243,17 +271,21 @@ def cancel_run(run_id: str) -> Dict[str, Any]:
 @app.get("/api/runs")
 def list_runs() -> Dict[str, Any]:
     """Return metadata for recent runs (most recent first)."""
+    if not _env_flag("RAF_ENABLE_RUN_LIST", default=False):
+        raise HTTPException(status_code=404, detail="run list disabled")
     return {"runs": manager.list_runs()}
 
 
 @app.websocket("/api/stream/{run_id}")
 async def stream(run_id: str, websocket: WebSocket) -> None:
-    await websocket.accept()
+    token = websocket.query_params.get("token")
     run_state = manager.get(run_id)
-    if not run_state:
-        await websocket.send_json({"event": "error", "message": "run not found"})
-        await websocket.close()
+    if not run_state or not token or token != run_state.access_token:
+        await websocket.accept()
+        await websocket.send_json({"event": "error", "message": "invalid run token"})
+        await websocket.close(code=1008)
         return
+    await websocket.accept()
     try:
         async for event in manager.stream_events(run_state):
             await websocket.send_json(event)

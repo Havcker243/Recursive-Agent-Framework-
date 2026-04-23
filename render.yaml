@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: recursive-agent-framework-api
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RAF_ENABLE_RUN_LIST
+        value: false
+      - key: RAF_REQUIRE_USER_API_KEY
+        value: true
+      - key: RAF_ALLOWED_ORIGINS
+        sync: false

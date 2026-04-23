@@ -18,6 +18,7 @@ RunManager
 
 import asyncio
 import os
+import secrets
 import threading
 import time
 import uuid
@@ -73,6 +74,7 @@ class RunState:
     root_agents: List[Dict[str, Optional[str]]] = field(default_factory=list)   # Tier 2: root/referee
     config_overrides: Dict[str, object] = field(default_factory=dict)
     api_key: Optional[str] = None  # user-supplied key; overrides server env vars
+    access_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     status: str = "running"
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None

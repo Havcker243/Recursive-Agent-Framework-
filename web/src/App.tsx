@@ -50,7 +50,7 @@ type SessionConfig = {
 }
 type Session = {
   id: string; goal: string; provider: string; providerLabel?: string; status: string
-  ts: number; nodeCount: number; output?: string; domain?: string; runId?: string | null
+  ts: number; nodeCount: number; output?: string; domain?: string; runId?: string | null; runToken?: string | null
   currentPhase?: string
   config?: SessionConfig
   events?: RafEvent[]
@@ -74,6 +74,13 @@ const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8001"
 const SESSION_STORAGE_KEY = "raf-web-sessions-v1"
 const API_KEY_STORAGE_KEY = "raf-openrouter-api-key"
 const DOMAIN_OPTIONS = ["", "technical", "culinary", "fitness", "creative", "business", "academic", "general"]
+
+function authHeaders(runToken?: string | null, json = false): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (json) headers["Content-Type"] = "application/json"
+  if (runToken) headers["X-Run-Token"] = runToken
+  return headers
+}
 
 // ── Model strategy presets ─────────────────────────────────────────────────────
 // Each preset is a named configuration that sets consortium + jury slots.
@@ -475,6 +482,7 @@ export default function App() {
 
   // run state
   const [runId, setRunId] = useState<string | null>(null)
+  const [runToken, setRunToken] = useState<string | null>(null)
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error" | "cancelled">("idle")
   const [events, setEvents] = useState<RafEvent[]>([])
   const [nodeOutputs, setNodeOutputs] = useState<Map<string, NodeOutput>>(new Map())
@@ -638,6 +646,7 @@ export default function App() {
       ...s,
       provider,
       runId,
+      runToken,
       status: runStatus,
       nodeCount,
       output: runResult || s.output,
@@ -650,7 +659,7 @@ export default function App() {
       graphLinks: linkSnapshot,
       nodeOutputs: outputsSnapshot,
     } : s))
-  }, [activeSessionId, provider, runId, runStatus, nodeCount, runResult, detectedDomain, currentPhase, currentConfig, events, graphNodes, graphLinks, nodeOutputs])
+  }, [activeSessionId, provider, runId, runToken, runStatus, nodeCount, runResult, detectedDomain, currentPhase, currentConfig, events, graphNodes, graphLinks, nodeOutputs])
 
   const restoreSession = useCallback((session: Session) => {
     const restoredEvents = session.events || []
@@ -682,6 +691,7 @@ export default function App() {
       setSystemPrompt(session.config.systemPrompt || "")
     }
     setRunId(session.runId || null)
+    setRunToken(session.runToken || null)
     setRunStatus((session.status as typeof runStatus) || "idle")
     setEvents(restoredEvents)
     graphNodesRef.current = restoredNodes
@@ -1056,9 +1066,9 @@ export default function App() {
   }, [addGraphNode, updateGraphNode, addDependencyEdgesForParent])
 
   // websocket connection
-  const connectWs = useCallback((rid: string) => {
+  const connectWs = useCallback((rid: string, token: string) => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close() }
-    const wsUrl = API_BASE.replace(/^http/, "ws") + `/api/stream/${rid}`
+    const wsUrl = API_BASE.replace(/^http/, "ws") + `/api/stream/${rid}?token=${encodeURIComponent(token)}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     ws.onopen = () => { reconnectAttemptsRef.current = 0 }
@@ -1074,7 +1084,7 @@ export default function App() {
       const attempts = reconnectAttemptsRef.current
       if (attempts >= 6) return
       reconnectAttemptsRef.current = attempts + 1
-      setTimeout(() => { if (isRunningRef.current) connectWs(rid) }, Math.min(500 * Math.pow(2, attempts), 16000))
+      setTimeout(() => { if (isRunningRef.current) connectWs(rid, token) }, Math.min(500 * Math.pow(2, attempts), 16000))
     }
   }, [processEvent])
 
@@ -1096,6 +1106,7 @@ export default function App() {
       setRunResult(null); setDetectedDomain(null); setSelectedNode(null)
       setPendingPlan(null); setNodeCount(0)
       setCurrentPhase("Starting")
+      setRunToken(null)
       setPartialFailures(0); setStaleWarning(false); setLastEventAge(null)
       lastEventTsRef.current = 0
       runStartRef.current = null
@@ -1144,9 +1155,11 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
       if (!res.ok) throw new Error(`Server error ${res.status}`)
-      const data = await res.json() as { run_id: string }
+      const data = await res.json() as { run_id: string; access_token?: string }
+      if (!data.access_token) throw new Error("Server did not return a run access token")
       setRunId(data.run_id)
-      connectWs(data.run_id)
+      setRunToken(data.access_token)
+      connectWs(data.run_id, data.access_token)
     } catch (err) {
       setRunStatus("error")
       setEvents([{ event: "run_done", error: String(err) }])
@@ -1158,7 +1171,7 @@ export default function App() {
     if (!runId) return
     // Keep isRunningRef=true so reconnect can still fire and receive the
     // authoritative run_done { status: "cancelled" } from the server.
-    await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST" }).catch(() => {})
+    await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) }).catch(() => {})
   }
 
   const updateConsortiumSlot = (index: number, patch: Partial<AgentSlot>) => {
@@ -1250,8 +1263,8 @@ export default function App() {
     if (!runId) return { freshEvents: events, freshResult: runResult, freshStatus: runStatus }
     try {
       const [evRes, stRes] = await Promise.all([
-        fetch(`${API_BASE}/api/run/${runId}/events`),
-        fetch(`${API_BASE}/api/run/${runId}`),
+        fetch(`${API_BASE}/api/run/${runId}/events`, { headers: authHeaders(runToken) }),
+        fetch(`${API_BASE}/api/run/${runId}`, { headers: authHeaders(runToken) }),
       ])
       const freshEvents: RafEvent[] = evRes.ok ? ((await evRes.json()) as { events?: RafEvent[] }).events || events : events
       const stData = stRes.ok ? await stRes.json() as { status?: string; result?: { output?: string } | null } : null
@@ -1541,7 +1554,7 @@ export default function App() {
   const approvePlan = async () => {
     if (!pendingPlan || !runId) return
     await fetch(`${API_BASE}/api/run/${runId}/approve_plan`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: authHeaders(runToken, true),
       body: JSON.stringify({ node_id: pendingPlan.nodeId, children: pendingPlan.children }),
     }).catch(() => {})
     setPendingPlan(null)
@@ -1989,6 +2002,14 @@ export default function App() {
                         disabled={running}
                         className="font-mono text-xs h-7"
                       />
+                      <p className="text-[10px] leading-4 text-muted-foreground">
+                        Paste your own OpenRouter key here. It stays in this browser via local storage and is sent only
+                        with your run request.
+                      </p>
+                      <p className="text-[10px] leading-4 text-muted-foreground">
+                        Need one? Open <span className="font-mono">openrouter.ai/keys</span>, create a key, copy it,
+                        and paste it into this box.
+                      </p>
                     </div>
                   )}
 
@@ -3175,6 +3196,12 @@ function ModelChooser({ title, provider, model, juryModel, providers, availableP
 
       {open && (
         <div className="border-t border-border/60 p-2 space-y-3">
+          <div className="rounded-md border border-border/50 bg-accent/20 px-2 py-2 text-[10px] leading-4 text-muted-foreground">
+            Public use currently supports <span className="font-medium text-foreground">mock</span> and{" "}
+            <span className="font-medium text-foreground">openrouter</span> as providers. To use real models, choose
+            <span className="font-medium text-foreground"> openrouter</span>, paste your OpenRouter API key above, and
+            then pick any supported model ID from the list below.
+          </div>
           <div className="grid grid-cols-1 gap-2">
             <ConfigSection label="Provider">
               <Select value={provider} onChange={e => onProviderChange(e.target.value)} disabled={disabled}>

@@ -696,7 +696,7 @@ export default function Landing({ onEnter }: { onEnter: () => void }) {
                     <li>1. Open the key page with the button below.</li>
                     <li>2. Sign in or create an OpenRouter account.</li>
                     <li>3. Create a new API key in your workspace.</li>
-                    <li>4. Copy the key and paste it into RAF's API key field.</li>
+                    <li>4. Copy the key and paste it into RAF's OpenRouter API key field.</li>
                     <li>5. Select OpenRouter as the provider and run a small test first.</li>
                   </ol>
                   <a
@@ -710,6 +710,10 @@ export default function Landing({ onEnter }: { onEnter: () => void }) {
                   <p className="mt-3 text-xs leading-5 text-zinc-500">
                     If you are already signed in, OpenRouter may open your account directly. New users will be taken
                     through sign-in first.
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-zinc-500">
+                    In the public app, real model calls currently go through OpenRouter. Mock mode is still available if
+                    you want to test the interface without a key.
                   </p>
                 </article>
 

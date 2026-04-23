@@ -269,6 +269,50 @@ AGENTS.md               Instructions for AI agents working in this repo
 
 ---
 
+## Deployment
+
+This repo is set up for a public deploy with **Vercel** for the frontend and **Render** for the FastAPI backend.
+
+### Frontend: Vercel
+
+- Import the repo into Vercel.
+- Keep the existing root `vercel.json` config.
+- Set `VITE_API_URL` to your Render backend URL, for example: `https://recursive-agent-framework-api.onrender.com`
+
+### Backend: Render
+
+- Create a new Render **Web Service** from this repo, or deploy from the included `render.yaml`.
+- Use the root directory of the repo.
+- Render should use:
+  - Build command: `pip install -r requirements.txt`
+  - Start command: `uvicorn server.main:app --host 0.0.0.0 --port $PORT`
+  - Health check path: `/api/health`
+
+Set these backend environment variables on Render:
+
+- `RAF_ALLOWED_ORIGINS=https://your-vercel-app.vercel.app`
+- `RAF_ENABLE_RUN_LIST=false`
+- `RAF_REQUIRE_USER_API_KEY=true`
+
+Optional:
+
+- `OPENROUTER_API_KEY=...`
+
+If you set `RAF_REQUIRE_USER_API_KEY=true`, public users must paste in their own API key in the web UI for non-mock providers. That is the safer public setup.
+
+### Public-use defaults
+
+The backend is configured so public users cannot read arbitrary run history by default:
+
+- recent run listing is disabled unless explicitly enabled
+- each run gets its own access token
+- run status, event replay, cancellation, and plan approval require that token
+- WebSocket streaming requires the same token
+
+For local development, copy `.env.example` into `.env` and adjust values as needed.
+
+---
+
 ## Research Foundations
 
 This project draws from several fields.
