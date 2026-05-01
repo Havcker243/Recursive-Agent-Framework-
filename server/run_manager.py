@@ -17,6 +17,7 @@ RunManager
 """
 
 import asyncio
+import logging
 import os
 import secrets
 import threading
@@ -25,6 +26,8 @@ import uuid
 from dataclasses import dataclass, field
 from queue import Queue
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from raf.core.deps import DependencyError, validate_plan
 from raf.core.engine import RafEngine
@@ -74,6 +77,8 @@ class RunState:
     root_agents: List[Dict[str, Optional[str]]] = field(default_factory=list)   # Tier 2: root/referee
     config_overrides: Dict[str, object] = field(default_factory=dict)
     api_key: Optional[str] = None  # user-supplied key; overrides server env vars
+    # If this run was forked from another, stores the parent run_id for lineage tracking.
+    fork_source: Optional[str] = None
     access_token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     status: str = "running"
     result: Optional[Dict[str, Any]] = None
@@ -430,6 +435,145 @@ class RunManager:
 
         return config
 
+    # ── forking ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_fork_goal(
+        parent_events: List[Dict[str, Any]],
+        node_id: str,
+        override_goal: Optional[str],
+    ) -> Optional[str]:
+        """Build an enriched goal string for a forked run.
+
+        Walks the parent run's event log to find the clicked node, collects
+        ancestor node goals as context, and optionally attaches the node's
+        prior output so the fork knows what was already attempted.
+
+        Returns None if node_id cannot be found in the event log (→ 404).
+        """
+        # Find the node_created event for the target node
+        target_event = next(
+            (e for e in parent_events
+             if e.get("event") == "node_created" and e.get("node_id") == node_id),
+            None,
+        )
+        if target_event is None:
+            return None
+
+        original_goal = target_event.get("goal", "")
+        # Use the user-supplied override if provided, else fall back to the
+        # original goal from the parent run's event log.
+        fork_goal = (override_goal or "").strip() or original_goal
+
+        target_depth = target_event.get("depth", 0)
+        target_ts = target_event.get("timestamp", 0)
+
+        # Collect ancestor node goals: nodes at shallower depth created before
+        # the target. Limit to 5 entries so the enriched goal stays concise.
+        ancestor_events = [
+            e for e in parent_events
+            if e.get("event") == "node_created"
+            and e.get("depth", 99) < target_depth
+            and e.get("timestamp", 0) < target_ts
+            and e.get("goal")
+        ]
+        # Sort shallowest-first (root → parent) and cap at 5
+        ancestor_events = sorted(ancestor_events, key=lambda e: e.get("depth", 0))[:5]
+
+        # Pull the prior output for this node if it already completed in the
+        # parent run. This lets the fork know what was tried before.
+        prior_output: Optional[str] = next(
+            (e.get("output", "") for e in parent_events
+             if e.get("event") == "node_done" and e.get("node_id") == node_id),
+            None,
+        )
+
+        context_parts: List[str] = []
+
+        if ancestor_events:
+            context_parts.append(
+                "[FORK CONTEXT — ancestor tasks completed in parent run]"
+            )
+            for e in ancestor_events:
+                goal_text = (e.get("goal") or "").replace("\n", " ").strip()
+                if goal_text:
+                    context_parts.append(f"  - {goal_text}")
+
+        if prior_output:
+            # Clamp to 1000 chars so we don't blow up the context window
+            clamped = prior_output[:1000] + ("…" if len(prior_output) > 1000 else "")
+            context_parts.append(
+                f"\n[PRIOR OUTPUT for this node in parent run]\n{clamped}"
+            )
+
+        if context_parts:
+            header = "\n".join(context_parts)
+            return f"{header}\n\n[FORK SUB-GOAL]\n{fork_goal}"
+
+        # No ancestor context (e.g. forking the root node itself) — run the
+        # goal directly so the fork behaves like a plain re-run.
+        return fork_goal
+
+    def fork_run(
+        self,
+        parent_state: RunState,
+        node_id: str,
+        override_goal: Optional[str] = None,
+        consortium_size: Optional[int] = None,
+        jury_size: Optional[int] = None,
+        max_nodes_total: Optional[int] = None,
+    ) -> Optional[RunState]:
+        """Create a new run forked from a specific node in an existing run.
+
+        The fork is a fully independent run whose goal is enriched with
+        ancestor context from the parent's event log. It inherits the parent's
+        provider / model / agent config, but the caller can override the agent
+        counts and node budget so exploratory forks don't accidentally spin up
+        a run as large as the original.
+
+        Returns None (→ HTTP 404) if node_id is not found in parent events.
+        """
+        enriched_goal = self._build_fork_goal(
+            parent_state.events, node_id, override_goal
+        )
+        if enriched_goal is None:
+            logger.warning(
+                "fork_run: node_id %r not found in run %s events — returning None (→ 404)",
+                node_id, parent_state.run_id,
+            )
+            return None
+
+        # Start from the parent's config and layer the fork-specific overrides
+        # on top. This way any settings the parent had (timeouts, domain, etc.)
+        # carry over while the user-controlled cost knobs take effect.
+        fork_config = dict(parent_state.config_overrides)
+        if consortium_size is not None and consortium_size > 0:
+            fork_config["consortium_size"] = consortium_size
+        if jury_size is not None and jury_size > 0:
+            fork_config["jury_size"] = jury_size
+        if max_nodes_total is not None and max_nodes_total > 0:
+            fork_config["max_nodes_total"] = max_nodes_total
+
+        # Clone the parent's adapter slots. If the user reduced the consortium
+        # size below the number of slots, the engine will only use the first N.
+        fork_state = self.create_run(
+            enriched_goal,
+            provider=parent_state.provider,
+            model=parent_state.model,
+            config_overrides=fork_config,
+            jury_model=parent_state.jury_model,
+            consortium_agents=parent_state.consortium_agents,
+            jury_agents=parent_state.jury_agents,
+            leaf_agents=parent_state.leaf_agents,
+            mid_agents=parent_state.mid_agents,
+            root_agents=parent_state.root_agents,
+            api_key=parent_state.api_key,
+        )
+
+        # Tag the new run with its origin so lineage is traceable
+        fork_state.fork_source = parent_state.run_id
+        return fork_state
+
     def _execute(self, run: RunState) -> None:
         """Entry point for the background daemon thread that runs the engine."""
         try:
@@ -473,8 +617,8 @@ class RunManager:
             if fb_provider:
                 try:
                     fallback_adapter = self._build_adapter(fb_provider, fb_model, key)
-                except Exception:
-                    pass  # missing key — run without fallback
+                except Exception as exc:
+                    logger.debug("Fallback adapter unavailable for provider %r: %s", fb_provider, exc)
 
             # ── Tier adapter lists for depth-based model routing ───────────────
             # When tier agents are provided: leaf → workers, mid → planners,
@@ -515,6 +659,9 @@ class RunManager:
         except Exception as exc:
             run.status = "error"
             run.error = str(exc)
+            # Full traceback goes to the server log; only the message string is
+            # forwarded to the client via run_done so users never see raw stack traces.
+            logger.exception("Run %s failed: %s", run.run_id, exc)
         finally:
             run.completed_at = time.time()
             run.emit(

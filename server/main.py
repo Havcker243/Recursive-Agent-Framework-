@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from server.run_manager import RunManager
+
+logger = logging.getLogger(__name__)
 
 # ⚠ LOCAL DEV ONLY — this server has no authentication.
 # Do not expose port 8001 on a shared/public network: any caller can start
@@ -23,7 +26,8 @@ try:
     for _env_path in [_ROOT / "raf" / ".env", _ROOT / ".env"]:
         load_dotenv(_env_path, override=False)
 except ImportError:
-    # python-dotenv not installed — fall back to simple parser.
+    logger.debug("python-dotenv not installed — using built-in .env parser")
+    # fall back to simple parser.
     # Handles: KEY=value, KEY="value", KEY='value', blank lines, # comments.
     # Does NOT handle: multiline values, export KEY=value, values containing #.
     for _env_path in [_ROOT / "raf" / ".env", _ROOT / ".env"]:
@@ -91,6 +95,22 @@ class DemoRequest(BaseModel):
 class ApprovePlanRequest(BaseModel):
     node_id: str
     children: List[Dict[str, Any]]
+
+
+class ForkRequest(BaseModel):
+    # The graph node ID the user clicked to fork from (e.g. "node-3")
+    node_id: str
+    # Optional goal override — if omitted the fork uses the node's original goal
+    # with ancestor context prepended. If provided it replaces the base goal
+    # while still keeping the ancestor context prefix.
+    goal: str | None = None
+    # Agent count overrides — let the user dial down the fork's call volume.
+    # Defaults to None (inherit from parent config).
+    consortium_size: int | None = None
+    jury_size: int | None = None
+    # Hard cap on how many nodes the fork can spawn. Keeps exploratory forks
+    # from running up a bill as large as the original run.
+    max_nodes_total: int | None = None
 
 
 app = FastAPI()
@@ -268,6 +288,46 @@ def cancel_run(run_id: str, x_run_token: str | None = Header(default=None)) -> D
     return {"ok": ok}
 
 
+@app.post("/api/run/{run_id}/fork")
+def fork_run(
+    run_id: str,
+    body: ForkRequest,
+    x_run_token: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    """Fork a completed run from a specific node.
+
+    Creates a brand-new independent run whose goal is enriched with ancestor
+    context extracted from the parent run's event log. The forked run inherits
+    the parent's provider / model / agent config so the user doesn't need to
+    reconfigure anything.
+
+    The parent run must still be in server memory (not evicted). If the
+    node_id is not found in the parent's events, returns 404.
+    """
+    parent_state = _require_run_token(run_id, x_run_token)
+    fork_state = manager.fork_run(
+        parent_state,
+        body.node_id,
+        body.goal,
+        consortium_size=body.consortium_size,
+        jury_size=body.jury_size,
+        max_nodes_total=body.max_nodes_total,
+    )
+    if fork_state is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"node_id '{body.node_id}' not found in run events. "
+                   "The parent run may have been evicted from server memory.",
+        )
+    return {
+        "run_id": fork_state.run_id,
+        "access_token": fork_state.access_token,
+        # Return lineage info so the frontend can label the fork session
+        "fork_source_run_id": run_id,
+        "fork_source_node_id": body.node_id,
+    }
+
+
 @app.get("/api/runs")
 def list_runs() -> Dict[str, Any]:
     """Return metadata for recent runs (most recent first)."""
@@ -290,4 +350,5 @@ async def stream(run_id: str, websocket: WebSocket) -> None:
         async for event in manager.stream_events(run_state):
             await websocket.send_json(event)
     except WebSocketDisconnect:
+        logger.debug("WebSocket client disconnected from run %s", run_id)
         return

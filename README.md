@@ -201,11 +201,27 @@ The design is built on a set of core principles:
 | AgentJury (multi-agent voting) | Complete |
 | Sibling dependency execution | Complete |
 | JSON schema output validation | Complete |
-| Context refinement layer (pseudocode) | Complete |
+| Context refinement layer | Complete |
 | FastAPI server with WebSocket streaming | Complete |
 | React and Vite web frontend | Complete |
+| Live D3 execution graph with full/simplified modes | Complete |
+| Node click inspector (goal, output, votes, proposals, errors) | Complete |
+| Run session history with replay and export | Complete |
+| JSON and PDF export with graph capture | Complete |
+| Physics tuner for graph layout | Complete |
+| Plan governance UI (auto / review / manual approval) | Complete |
+| Plan recovery UI (off / auto-retry / ask) | Complete |
+| Tier-based model routing (leaf / mid / root agent slots) | Complete |
+| Multi-model consortium and jury slot configuration | Complete |
+| Run fork — branch any completed node with ancestor context | Complete |
+| Goal chaining / pipeline — chain multiple runs sequentially with `{{output}}` passing | Complete |
+| Node replay — re-run a single completed node in background | Complete |
+| "Use this result" post-replay actions (copy, fork, go to parent, add to pipeline) | Complete |
+| Per-run access token authentication | Complete |
 | OpenRouter and Mock LLM adapters | Complete |
 | Additional adapters (Claude, DeepSeek, Groq, HuggingFace) | Written, not yet wired |
+| Structured logging throughout server (Python `logging` module) | Complete |
+| Frontend error logging with module-prefixed `console.error` / `console.warn` | Complete |
 
 ### What Remains
 
@@ -224,7 +240,8 @@ The design is built on a set of core principles:
 | Persistent run storage (database-backed) | Not started |
 | Full multi-provider adapter wiring | Not started |
 | Secret vault and tiered access control | Not started |
-| Real-time execution tree UI | Partial |
+| Per-task model timeouts and fallback routing | Not started |
+| Model call timing events in backend trace | Partial |
 
 ---
 
@@ -240,7 +257,11 @@ server/                 FastAPI backend server
 
 web/                    React and Vite frontend
   src/
-    components/         UI components
+    App.tsx             Main application — run orchestration, session management, graph state
+    components/
+      ExecutionGraph.tsx  D3 force-directed live graph
+      PipelinePanel.tsx   Goal chaining / pipeline floating panel
+      PhysicsPanel.tsx    Graph physics tuner overlay
 
 papers/                 Reference research papers
 handmade files/         Original handwritten design materials
@@ -264,7 +285,7 @@ AGENTS.md               Instructions for AI agents working in this repo
 | Output validation | JSON Schema |
 | Planned memory database | SurrealDB (native vector and graph in a single query) |
 | Planned substrate | Rust |
-| Planned visualization | D3 |
+| Graph visualization | D3 (force-directed, live streaming) |
 | Planned human memory interface | Obsidian |
 
 ---

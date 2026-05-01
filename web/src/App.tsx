@@ -3,7 +3,7 @@ import Landing from "./Landing"
 import type { PointerEvent } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import DOMPurify from "dompurify"
-import { Zap, Network, Play, Square, Clock, Vote, FileText, Plus, Download, ZoomIn, ZoomOut, RotateCcw, History, SlidersHorizontal, Home } from "lucide-react"
+import { Zap, Network, Play, Square, Clock, Vote, FileText, Plus, Download, ZoomIn, ZoomOut, RotateCcw, History, SlidersHorizontal, Home, Link2 } from "lucide-react"
 import { Button } from "./components/ui/button"
 import { Badge } from "./components/ui/badge"
 import { ScrollArea } from "./components/ui/scroll-area"
@@ -17,6 +17,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/ui/tabs"
 import { Card, CardContent } from "./components/ui/card"
 import { ExecutionGraph, type GraphNode, type GraphEdge, type PhysicsParams, DEFAULT_PHYSICS } from "./components/ExecutionGraph"
 import { PhysicsPanel } from "./components/PhysicsPanel"
+import { PipelinePanel } from "./components/PipelinePanel"
+import type { PipelineStep, PipelineStepResult } from "./components/PipelinePanel"
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -58,6 +60,9 @@ type Session = {
   graphLinks?: GraphEdge[]
   nodeOutputs?: Record<string, NodeOutput>
   result?: string | null
+  // Fork lineage — present only when this session was created via the fork action
+  forkSourceRunId?: string
+  forkSourceNodeId?: string
 }
 type ServerRunSummary = {
   run_id: string
@@ -361,7 +366,8 @@ function loadStoredSessions(): Session[] {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed.slice(0, 20) : []
-  } catch {
+  } catch (err) {
+    console.warn("[sessions] Failed to load stored sessions from localStorage:", err)
     return []
   }
 }
@@ -498,6 +504,47 @@ export default function App() {
   const [staleWarning, setStaleWarning] = useState(false)
   const [lastEventAge, setLastEventAge] = useState<number | null>(null)
 
+  // Fork state — controls the fork panel shown inside the node inspector
+  // when the user selects a completed raf-node and wants to branch from it.
+  const [forkGoalOverride, setForkGoalOverride] = useState("")
+  const [forkLoading, setForkLoading] = useState(false)
+  const [forkError, setForkError] = useState<string | null>(null)
+  // Agent count overrides for the fork — default to reduced values so
+  // exploratory forks don't automatically run at full parent cost.
+  const [forkConsortiumSize, setForkConsortiumSize] = useState(2)
+  const [forkJurySize, setForkJurySize] = useState(1)
+
+  // Node Replay state — tracks a single in-background re-execution of one node.
+  // replayForNodeId links the result back to the node that triggered it so that
+  // switching between nodes doesn't corrupt the status shown in the panel.
+  const [replayForNodeId, setReplayForNodeId] = useState<string | null>(null)
+  const [replayStatus, setReplayStatus] = useState<"idle" | "running" | "done" | "error">("idle")
+  const [replayRunId, setReplayRunId] = useState<string | null>(null)
+  const [replayRunToken, setReplayRunToken] = useState<string | null>(null)
+  const [replayOutput, setReplayOutput] = useState<string | null>(null)
+  const [replayConsortiumSize, setReplayConsortiumSize] = useState(2)
+  const [replayJurySize, setReplayJurySize] = useState(1)
+  const [replayCopied, setReplayCopied] = useState(false)
+  // Ref used inside the async WebSocket callback to guard against node switching
+  const replayForNodeIdRef = useRef<string | null>(null)
+  // Fork panel highlight — briefly rings the fork panel when "Fork from here" is clicked
+  const [forkHighlight, setForkHighlight] = useState(false)
+  const forkPanelRef = useRef<HTMLDivElement>(null)
+
+  // Pipeline state — Goal Chaining feature.
+  // The pipeline panel opens as a floating overlay from the graph toolbar.
+  // Each step runs as a fully independent RAF run; the pipeline never
+  // touches the active main run's state (runId, events, graph, etc.).
+  const [pipelineOpen, setPipelineOpen] = useState(false)
+  const [pipelinePanelPos, setPipelinePanelPos] = useState({ left: 300, top: 120 })
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([{ id: "step-1", goal: "" }])
+  const [pipelineRunning, setPipelineRunning] = useState(false)
+  const [pipelineStepIdx, setPipelineStepIdx] = useState(-1)
+  const [pipelineResults, setPipelineResults] = useState<PipelineStepResult[]>([])
+  // Ref used to cooperatively cancel a running pipeline without async state lag
+  const pipelineCancelRef = useRef(false)
+  const pipelinePanelDragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+
   // physics
   const [physics, setPhysics] = useState<PhysicsParams>({ ...DEFAULT_PHYSICS })
 
@@ -579,7 +626,7 @@ export default function App() {
         if (d.defaults?.provider) setProvider(d.defaults.provider)
         if (d.defaults?.model) setModel(d.defaults.model)
       })
-      .catch(() => {})
+      .catch((err) => console.warn("[models] Failed to load provider/model list:", err))
   }, [])
 
   useEffect(() => {
@@ -603,7 +650,8 @@ export default function App() {
       if (!res.ok) return
       const data = await res.json() as { runs?: ServerRunSummary[] }
       setServerRuns(data.runs || [])
-    } catch {
+    } catch (err) {
+      console.warn("[runs] Failed to fetch server run list:", err)
       setServerRuns([])
     }
   }, [])
@@ -1077,7 +1125,9 @@ export default function App() {
         const ev: RafEvent = JSON.parse(msg.data)
         if (ev.event === "run_started" && !runStartRef.current) runStartRef.current = Date.now()
         processEvent(ev)
-      } catch {}
+      } catch (err) {
+        console.error("[ws] Failed to parse event message:", err, "raw:", msg.data?.slice?.(0, 200))
+      }
     }
     ws.onclose = () => {
       if (!isRunningRef.current) return
@@ -1161,6 +1211,7 @@ export default function App() {
       setRunToken(data.access_token)
       connectWs(data.run_id, data.access_token)
     } catch (err) {
+      console.error("[run] Failed to start run:", err)
       setRunStatus("error")
       setEvents([{ event: "run_done", error: String(err) }])
       isRunningRef.current = false
@@ -1171,7 +1222,514 @@ export default function App() {
     if (!runId) return
     // Keep isRunningRef=true so reconnect can still fire and receive the
     // authoritative run_done { status: "cancelled" } from the server.
-    await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) }).catch(() => {})
+    await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) })
+      .catch((err) => console.warn("[run] Cancel request failed for run", runId, err))
+  }
+
+  // ── Pipeline helpers ─────────────────────────────────────────────────────────
+
+  /**
+   * Open an isolated WebSocket for a pipeline step and resolve when run_done
+   * fires. This is intentionally separate from the main wsRef so pipeline
+   * steps run without disturbing the active session's event stream.
+   */
+  const waitForRunDone = (stepRunId: string, stepToken: string): Promise<string | undefined> =>
+    new Promise((resolve, reject) => {
+      let settled = false
+      const settle = (fn: () => void) => { if (!settled) { settled = true; fn() } }
+      const wsUrl = API_BASE.replace(/^http/, "ws") + `/api/stream/${stepRunId}?token=${encodeURIComponent(stepToken)}`
+      const ws = new WebSocket(wsUrl)
+      ws.onmessage = (msg) => {
+        // Honour a cooperative cancel requested from the UI
+        if (pipelineCancelRef.current) {
+          ws.close()
+          settle(() => reject(new Error("cancelled")))
+          return
+        }
+        try {
+          const ev: RafEvent = JSON.parse(msg.data)
+          if (ev.event === "run_done") {
+            ws.close()
+            settle(() => resolve((ev as any).result?.output))
+          }
+        } catch (parseErr) {
+          console.error("[pipeline] Failed to parse WebSocket message for run", stepRunId, parseErr)
+        }
+      }
+      ws.onerror = (e) => {
+        console.error("[pipeline] WebSocket error for run", stepRunId, e)
+        settle(() => reject(new Error("WebSocket connection failed")))
+      }
+      // Only reject on close if not already settled (e.g. connection dropped mid-run)
+      ws.onclose = (e) => {
+        if (!e.wasClean) {
+          console.error("[pipeline] WebSocket closed unexpectedly for run", stepRunId, "code:", e.code)
+        }
+        settle(() => reject(new Error("Connection closed before run completed")))
+      }
+    })
+
+  /**
+   * Run the pipeline sequentially. Each step becomes an independent /api/run
+   * call and a session entry in the sidebar. Steps run in the background; the
+   * main run's graph/events are left untouched.
+   *
+   * {{output}} in a step's goal is replaced with the previous step's output
+   * before the run starts. If a step fails, the pipeline stops at that step.
+   */
+  const runPipeline = async () => {
+    if (pipelineRunning) return
+    setPipelineRunning(true)
+    setPipelineStepIdx(0)
+    setPipelineResults([])
+    pipelineCancelRef.current = false
+
+    let lastOutput: string | undefined = undefined
+
+    for (let i = 0; i < pipelineSteps.length; i++) {
+      if (pipelineCancelRef.current) break
+
+      const step = pipelineSteps[i]
+      // Substitute the {{output}} placeholder with the previous step's output
+      const resolvedGoal = lastOutput
+        ? step.goal.replace(/\{\{output\}\}/g, lastOutput)
+        : step.goal
+
+      setPipelineStepIdx(i)
+      setPipelineResults(prev => {
+        const next = [...prev]
+        next[i] = { stepId: step.id, runId: "", runToken: "", sessionId: "", status: "running", goal: resolvedGoal }
+        return next
+      })
+
+      try {
+        // Build the run body from the current session's config so the pipeline
+        // uses whatever provider / model / agent counts the user has set up.
+        const body: Record<string, unknown> = {
+          goal: resolvedGoal,
+          provider, model: model || null,
+          jury_model: juryModel || null,
+          consortium_size: consortiumSize, jury_size: jurySize,
+          max_depth: maxDepth, max_parallel_children: maxParallelChildren,
+          max_nodes_total: maxNodesTotal,
+          plan_approval_required: false,
+          tools_enabled: toolsEnabled,
+          // Pipeline steps always skip clarification so they run autonomously
+          skip_clarify: true,
+          force_recursive: forceRecursive,
+          domain: domainOverride || null,
+          system_prompt: systemPrompt || null,
+          api_key: provider !== "mock" && apiKey ? apiKey : null,
+        }
+        if (multiModel && consortiumSlots.length > 0) body.consortium_agents = consortiumSlots
+        if (multiModel && jurySlots.length > 0) body.jury_agents = jurySlots
+        if (multiModel && tierRouting) {
+          if (leafSlots.length > 0) body.leaf_agents = leafSlots
+          if (midSlots.length > 0) body.mid_agents = midSlots
+          if (rootSlots.length > 0) body.root_agents = rootSlots
+        }
+
+        const res = await fetch(`${API_BASE}/api/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })
+        if (!res.ok) throw new Error(`Server error ${res.status}`)
+        const data = await res.json() as { run_id: string; access_token: string }
+
+        // Register a session entry so the user can view this step in the sidebar
+        const stepSessionId = `pipeline-step-${i + 1}-${Date.now()}`
+        const stepLabel = `[pipeline:${i + 1}] ${resolvedGoal.slice(0, 50)}`
+        setSessions(prev => [{
+          id: stepSessionId,
+          goal: stepLabel,
+          provider,
+          providerLabel: multiModel
+            ? `multi · ${(consortiumSlots[0]?.model || "").split("/").pop() || "multi"}`
+            : provider,
+          status: "running",
+          ts: Date.now(),
+          nodeCount: 0,
+          currentPhase: "Starting",
+          config: currentConfig(),
+          events: [], graphNodes: [], graphLinks: [], nodeOutputs: {},
+        }, ...prev.slice(0, 19)])
+
+        // Store the run IDs so the panel can show a "View" button once done
+        setPipelineResults(prev => {
+          const next = [...prev]
+          next[i] = { ...next[i], runId: data.run_id, runToken: data.access_token, sessionId: stepSessionId }
+          return next
+        })
+
+        // Block until this step's run_done event arrives
+        const output = await waitForRunDone(data.run_id, data.access_token)
+        lastOutput = output
+
+        // Mark the session and result as done
+        setSessions(prev => prev.map(s => s.id === stepSessionId ? { ...s, status: "done", output } : s))
+        setPipelineResults(prev => {
+          const next = [...prev]
+          next[i] = { ...next[i], status: "done", output }
+          return next
+        })
+
+      } catch (err) {
+        const errMsg = String(err)
+        const isCancelled = errMsg.includes("cancelled")
+        // Log full error details to the browser console — not shown in the UI.
+        // The panel only shows a status icon (✕) so users know the step failed
+        // without seeing raw exception strings.
+        if (!isCancelled) {
+          console.error(`[pipeline] step ${i + 1} failed:`, err)
+        }
+        setPipelineResults(prev => {
+          const next = [...prev]
+          if (next[i]) next[i] = { ...next[i], status: isCancelled ? "cancelled" : "error" }
+          return next
+        })
+        break  // stop the pipeline on any error or cancellation
+      }
+    }
+
+    setPipelineRunning(false)
+    setPipelineStepIdx(-1)
+  }
+
+  /** Signal the running pipeline to stop after the current step finishes. */
+  const cancelPipeline = () => { pipelineCancelRef.current = true }
+
+  // ── Node Replay ───────────────────────────────────────────────────────────────
+
+  /**
+   * Re-run a single node's goal as a fresh isolated execution.
+   *
+   * Unlike Fork, Replay injects no ancestor context — it's a clean attempt at
+   * the same task, capped at 1 node so it stays atomic. The current session's
+   * graph and events are left completely untouched; the result lands in a new
+   * session entry in the sidebar and is visible through "View result" once done.
+   *
+   * Works for both successful and failed nodes — re-running a failed node is
+   * the primary use-case ("retry").
+   */
+  const replayNode = async (nodeId: string, nodeGoal: string) => {
+    if (!nodeGoal.trim() || replayStatus === "running") return
+
+    // Capture the node ID in a ref so the async WebSocket callback can guard
+    // against the user switching nodes mid-replay.
+    replayForNodeIdRef.current = nodeId
+    setReplayForNodeId(nodeId)
+    setReplayStatus("running")
+    setReplayOutput(null)
+    setReplayRunId(null)
+    setReplayRunToken(null)
+
+    try {
+      // Build run body from current session config — same provider/model the
+      // user already has configured, but with reduced agent counts and a 1-node cap.
+      const body: Record<string, unknown> = {
+        goal: nodeGoal,
+        provider, model: model || null,
+        jury_model: juryModel || null,
+        consortium_size: replayConsortiumSize,
+        jury_size: replayJurySize,
+        max_depth: maxDepth,
+        max_parallel_children: maxParallelChildren,
+        // Hard cap: replay is a single atomic execution.
+        // If the task naturally recurses, the engine will still decide its mode,
+        // but the node budget prevents runaway expansion.
+        max_nodes_total: 1,
+        plan_approval_required: false,
+        tools_enabled: toolsEnabled,
+        skip_clarify: true,   // replay runs autonomously, no clarification loop
+        force_recursive: false,
+        domain: domainOverride || null,
+        system_prompt: systemPrompt || null,
+        api_key: provider !== "mock" && apiKey ? apiKey : null,
+      }
+      if (multiModel && consortiumSlots.length > 0) body.consortium_agents = consortiumSlots
+      if (multiModel && jurySlots.length > 0) body.jury_agents = jurySlots
+      if (multiModel && tierRouting) {
+        if (leafSlots.length > 0) body.leaf_agents = leafSlots
+        if (midSlots.length > 0) body.mid_agents = midSlots
+        if (rootSlots.length > 0) body.root_agents = rootSlots
+      }
+
+      const res = await fetch(`${API_BASE}/api/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error(`Server error ${res.status}`)
+      const data = await res.json() as { run_id: string; access_token: string }
+
+      // Register a sidebar session so the user can view it later
+      const newReplaySessionId = `replay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      setSessions(prev => [{
+        id: newReplaySessionId,
+        goal: `[replay] ${nodeGoal.slice(0, 50)}`,
+        provider,
+        providerLabel: multiModel
+          ? `multi · ${(consortiumSlots[0]?.model || "").split("/").pop() || "multi"}`
+          : provider,
+        status: "running",
+        ts: Date.now(),
+        nodeCount: 0,
+        currentPhase: "Starting",
+        config: currentConfig(),
+        events: [], graphNodes: [], graphLinks: [], nodeOutputs: {},
+      }, ...prev.slice(0, 19)])
+
+      setReplayRunId(data.run_id)
+      setReplayRunToken(data.access_token)
+
+      // Open an isolated WebSocket just for this replay — separate from the
+      // main wsRef so the current session's event stream is never disrupted.
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const settle = (fn: () => void) => { if (!settled) { settled = true; fn() } }
+        const capturedNodeId = nodeId  // closed over so the handler can guard
+        const wsUrl = API_BASE.replace(/^http/, "ws") + `/api/stream/${data.run_id}?token=${encodeURIComponent(data.access_token)}`
+        const ws = new WebSocket(wsUrl)
+
+        ws.onmessage = (msg) => {
+          try {
+            const ev: RafEvent = JSON.parse(msg.data)
+            if (ev.event === "run_done") {
+              const output = (ev as any).result?.output as string | undefined
+              // Guard: only update state if the user hasn't switched nodes
+              if (replayForNodeIdRef.current === capturedNodeId) {
+                setReplayOutput(output || null)
+                setReplayStatus("done")
+                setSessions(prev => prev.map(s => s.id === newReplaySessionId ? { ...s, status: "done", output } : s))
+              }
+              ws.close()
+              settle(resolve)
+            }
+          } catch (parseErr) {
+            console.error("[replay] Failed to parse WebSocket message:", parseErr)
+          }
+        }
+        ws.onerror = (e) => {
+          console.error("[replay] WebSocket error for run", data.run_id, e)
+          settle(() => reject(new Error("WebSocket connection failed")))
+        }
+        ws.onclose = (e) => {
+          if (!e.wasClean) console.error("[replay] WebSocket closed unexpectedly, code:", e.code)
+          settle(() => reject(new Error("Connection closed before replay completed")))
+        }
+      })
+
+    } catch (err) {
+      console.error("[replay] Node replay failed for node", nodeId, err)
+      // Only mark error if still tracking this node's replay
+      if (replayForNodeIdRef.current === nodeId) setReplayStatus("error")
+    }
+  }
+
+  /**
+   * Load a completed replay run into the main viewport.
+   * Fetches events from the server and replays them exactly like replayServerRun.
+   * The current session is replaced in view but remains in the sidebar.
+   */
+  const viewReplayResult = async () => {
+    if (!replayRunId || !replayRunToken) return
+    try {
+      const [evRes, stRes] = await Promise.all([
+        fetch(`${API_BASE}/api/run/${replayRunId}/events`, { headers: authHeaders(replayRunToken) }),
+        fetch(`${API_BASE}/api/run/${replayRunId}`, { headers: authHeaders(replayRunToken) }),
+      ])
+      if (!evRes.ok) return
+      const evData = await evRes.json() as { events?: RafEvent[] }
+      const stData = stRes.ok ? await stRes.json() as { status?: string; result?: { output?: string } | null } : null
+      const replayEvents = evData.events || []
+
+      graphNodesRef.current = []; graphLinksRef.current = []
+      seenEventsRef.current = new Set()
+      satelliteEventsRef.current = []
+      planChildrenRef.current = {}; planChildNodeRef.current = {}; nodeCreatedTsRef.current = {}
+      setGraphNodes([]); setGraphLinks([]); setEvents([]); setNodeOutputs(new Map())
+      setRunResult(stData?.result?.output || replayOutput || null)
+      setDetectedDomain(null); setSelectedNode(null); setPendingPlan(null)
+      setNodeCount(0); setCurrentPhase("Replayed")
+      setRunId(replayRunId)
+      setRunToken(replayRunToken)
+      setRunStatus("done")
+      runStartRef.current = replayEvents.find(ev => ev.timestamp)?.timestamp
+        ? replayEvents.find(ev => ev.timestamp)!.timestamp! * 1000 : null
+
+      replayEvents.forEach(ev => processEvent(ev))
+      setCenterTab("timeline")
+      setWorkPanelOpen(true)
+    } catch (err) {
+      console.error("[replay] viewReplayResult failed:", err)
+    }
+  }
+
+  /**
+   * Replay a completed pipeline step's events into the main viewport,
+   * exactly like replayServerRun — fetches from the server so it works
+   * even if the session was evicted from local state.
+   */
+  const viewPipelineStep = async (result: PipelineStepResult) => {
+    if (!result.runId || !result.runToken) return
+    try {
+      const [evRes, stRes] = await Promise.all([
+        fetch(`${API_BASE}/api/run/${result.runId}/events`, { headers: authHeaders(result.runToken) }),
+        fetch(`${API_BASE}/api/run/${result.runId}`, { headers: authHeaders(result.runToken) }),
+      ])
+      if (!evRes.ok) return
+      const evData = await evRes.json() as { events?: RafEvent[]; status?: string }
+      const stData = stRes.ok ? await stRes.json() as { status?: string; result?: { output?: string } | null } : null
+      const replayEvents = evData.events || []
+
+      graphNodesRef.current = []; graphLinksRef.current = []
+      seenEventsRef.current = new Set()
+      satelliteEventsRef.current = []
+      planChildrenRef.current = {}; planChildNodeRef.current = {}; nodeCreatedTsRef.current = {}
+      setGraphNodes([]); setGraphLinks([]); setEvents([]); setNodeOutputs(new Map())
+      setRunResult(stData?.result?.output || result.output || null)
+      setDetectedDomain(null); setSelectedNode(null); setPendingPlan(null)
+      setNodeCount(0); setCurrentPhase("Replayed")
+      setRunId(result.runId)
+      setRunToken(result.runToken)
+      setRunStatus((stData?.status as typeof runStatus) || "done")
+      setGoal(result.goal)
+      runStartRef.current = replayEvents.find(ev => ev.timestamp)?.timestamp
+        ? replayEvents.find(ev => ev.timestamp)!.timestamp! * 1000
+        : null
+
+      replayEvents.forEach(ev => processEvent(ev))
+      setCenterTab("timeline")
+      setWorkPanelOpen(true)
+    } catch (err) {
+      // Log to console — the step may have been evicted from server memory.
+      // No UI feedback: the "View run" button simply does nothing on failure.
+      console.error("[pipeline] viewPipelineStep failed for run", result.runId, err)
+    }
+  }
+
+  // ── Pipeline panel drag handlers (pointer capture pattern) ──────────────────
+  const startPipelinePanelDrag = (e: PointerEvent<HTMLDivElement>) => {
+    // Don't start drag when the pointer went down on a button (e.g. the close ✕)
+    if ((e.target as HTMLElement).closest("button")) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pipelinePanelDragRef.current = { x: e.clientX, y: e.clientY, ...pipelinePanelPos }
+  }
+  const movePipelinePanelDrag = (e: PointerEvent<HTMLDivElement>) => {
+    if (!pipelinePanelDragRef.current) return
+    const { x, y, left, top } = pipelinePanelDragRef.current
+    setPipelinePanelPos({ left: left + e.clientX - x, top: top + e.clientY - y })
+  }
+  const endPipelinePanelDrag = () => { pipelinePanelDragRef.current = null }
+
+  /**
+   * Fork the current run from the selected node.
+   *
+   * Posts to /api/run/{run_id}/fork with the node_id and an optional goal
+   * override, then opens the forked run as a brand-new session so the user
+   * can watch it live without losing the parent session's graph.
+   *
+   * The forked run inherits all provider/model config from the parent run.
+   * The parent run must still be in server memory (not evicted by the 50-run
+   * history cap) — the backend returns 404 if it isn't.
+   */
+  const forkRun = async (nodeId: string, nodeGoal: string) => {
+    // runId is the parent run we're forking from; it must exist
+    if (!runId || !runToken) {
+      setForkError("No active run to fork from.")
+      return
+    }
+    setForkLoading(true)
+    setForkError(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/run/${runId}/fork`, {
+        method: "POST",
+        headers: authHeaders(runToken, true),
+        body: JSON.stringify({
+          node_id: nodeId,
+          // Only send the goal override when the user actually changed it;
+          // backend treats null as "use the node's original goal"
+          goal: forkGoalOverride.trim() !== nodeGoal.trim() ? forkGoalOverride.trim() || null : null,
+          // Agent-count overrides — the user sets these in the fork panel
+          consortium_size: forkConsortiumSize,
+          jury_size: forkJurySize,
+          // Cap the fork's node budget to keep exploratory runs affordable;
+          // the user can always start a fresh full run if they want more depth.
+          max_nodes_total: 20,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` })) as { detail?: string }
+        throw new Error(err.detail || `HTTP ${res.status}`)
+      }
+
+      const data = await res.json() as {
+        run_id: string
+        access_token: string
+        fork_source_run_id: string
+        fork_source_node_id: string
+      }
+
+      // Build a session label that makes the fork easy to identify in the list
+      const forkLabel = `[fork] ${(forkGoalOverride.trim() || nodeGoal).slice(0, 50)}`
+      const forkSessionId = `fork-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+
+      // Reset all graph/event state for the forked run — same as startRun's
+      // non-continuation path, since we're opening a fresh execution context.
+      graphNodesRef.current = []; graphLinksRef.current = []
+      seenEventsRef.current = new Set()
+      satelliteEventsRef.current = []
+      planChildrenRef.current = {}; planChildNodeRef.current = {}
+      nodeCreatedTsRef.current = {}
+      setGraphNodes([]); setGraphLinks([]); setEvents([]); setNodeOutputs(new Map())
+      setRunResult(null); setDetectedDomain(null); setSelectedNode(null)
+      setPendingPlan(null); setNodeCount(0)
+      setCurrentPhase("Starting")
+      setPartialFailures(0); setStaleWarning(false); setLastEventAge(null)
+      lastEventTsRef.current = 0; runStartRef.current = null
+
+      // Register the fork as a new session entry (prepended so it's first in the list)
+      setSessions(prev => [{
+        id: forkSessionId,
+        goal: forkLabel,
+        provider,
+        providerLabel: provider,
+        status: "running",
+        ts: Date.now(),
+        nodeCount: 0,
+        currentPhase: "Starting",
+        config: currentConfig(),
+        events: [], graphNodes: [], graphLinks: [], nodeOutputs: {},
+        // Store lineage so the session card can show a "forked from" badge
+        forkSourceRunId: data.fork_source_run_id,
+        forkSourceNodeId: data.fork_source_node_id,
+      }, ...prev.slice(0, 19)])
+
+      setActiveSessionId(forkSessionId)
+      setGoal(forkGoalOverride.trim() || nodeGoal)
+      setRunId(data.run_id)
+      setRunToken(data.access_token)
+      isRunningRef.current = true
+      setRunStatus("running")
+      setCenterTab("timeline")
+
+      // Open the WebSocket stream for the forked run — same connectWs the
+      // normal startRun uses, so all event processing is identical.
+      connectWs(data.run_id, data.access_token)
+
+      // Close the fork panel
+      setForkGoalOverride("")
+      setForkError(null)
+
+    } catch (err) {
+      console.error("[fork] Fork request failed:", err)
+      setForkError(String(err))
+    } finally {
+      setForkLoading(false)
+    }
   }
 
   const updateConsortiumSlot = (index: number, patch: Partial<AgentSlot>) => {
@@ -1253,7 +1811,8 @@ export default function App() {
       replayEvents.forEach(ev => processEvent(ev))
       setCenterTab("timeline")
       setWorkPanelOpen(true)
-    } catch {
+    } catch (err) {
+      console.error("[replay] Failed to replay server run", summary.run_id, err)
       setRunStatus("error")
     }
   }
@@ -1271,7 +1830,8 @@ export default function App() {
       const freshResult = stData?.result?.output ?? runResult
       const freshStatus = stData?.status ?? runStatus
       return { freshEvents, freshResult, freshStatus }
-    } catch {
+    } catch (err) {
+      console.warn("[export] Failed to fetch fresh run data, falling back to local state:", err)
       return { freshEvents: events, freshResult: runResult, freshStatus: runStatus }
     }
   }
@@ -1556,7 +2116,7 @@ export default function App() {
     await fetch(`${API_BASE}/api/run/${runId}/approve_plan`, {
       method: "POST", headers: authHeaders(runToken, true),
       body: JSON.stringify({ node_id: pendingPlan.nodeId, children: pendingPlan.children }),
-    }).catch(() => {})
+    }).catch((err) => console.warn("[plan] approve_plan request failed:", err))
     setPendingPlan(null)
   }
 
@@ -2651,6 +3211,17 @@ export default function App() {
                 <FileText className="h-3 w-3" /> Workspace
               </Button>
             )}
+            {/* Pipeline toggle — opens the Goal Chaining floating panel */}
+            <Button
+              variant={pipelineOpen ? "default" : "outline"}
+              size="sm"
+              className={`h-7 gap-1 text-[10px] ${pipelineOpen ? "bg-primary/20 text-primary border-primary/50" : ""} ${pipelineRunning ? "animate-pulse" : ""}`}
+              onClick={() => setPipelineOpen(o => !o)}
+              title="Goal Pipeline — chain multiple runs sequentially"
+            >
+              <Link2 className="h-3 w-3" />
+              {pipelineRunning ? `Pipeline · ${pipelineStepIdx + 1}/${pipelineSteps.length}` : "Pipeline"}
+            </Button>
             {/* Graph mode toggle */}
             <div className="flex items-center gap-1 border border-border rounded-md overflow-hidden">
               {(["simplified", "full"] as const).map(m => (
@@ -2717,7 +3288,28 @@ export default function App() {
             mode={graphMode} physics={physics}
             zoomCommand={zoomCommand}
             width={gSize.w} height={gSize.h}
-            onNodeClick={n => { setSelectedNode(n); setCenterTab("output") }}
+            onNodeClick={n => {
+              setSelectedNode(n)
+              setCenterTab("output")
+              if (n.type === "raf-node" && !n.active && n.success) {
+                // Pre-fill the fork goal and reset the agent-count controls to
+                // their reduced defaults each time a new node is selected, so
+                // the panel always starts from a known safe cost baseline.
+                setForkGoalOverride(n.goal || "")
+                setForkConsortiumSize(2)
+                setForkJurySize(1)
+              } else {
+                setForkGoalOverride("")
+              }
+              setForkError(null)
+              // Reset replay agent counts for the newly selected node.
+              // We intentionally do NOT clear replayStatus/replayRunId here —
+              // if a replay for this same node is already done, the panel should
+              // still show its result. The replayForNodeId check in the panel
+              // handles showing the right state per node.
+              setReplayConsortiumSize(2)
+              setReplayJurySize(1)
+            }}
             onBackgroundClick={() => setSelectedNode(null)}
           />
           {graphNodes.length === 0 && !running && (
@@ -2881,6 +3473,369 @@ export default function App() {
                               </div>
                             ))}</div></div>
                       )}
+
+                      {/* ── Fork panel — only shown on completed nodes ───────
+                          Lets the user branch from this exact point in the run
+                          and try a different approach. The fork is a fully
+                          independent run; it never affects the parent graph. */}
+                      {!selectedNode.active && selectedNode.success && runId && (() => {
+                        // ── Cost estimate ─────────────────────────────────────
+                        // Computed per-render so it reacts to the consortium /
+                        // jury sliders below without needing a separate effect.
+                        const perDecision = forkConsortiumSize + forkJurySize
+                        const knownChildren = selectedNodeChildren.filter(n => n.type === "raf-node").length
+
+                        let minCalls: number, maxCalls: number, typeNote: string
+                        if (selectedNode.caseType === "base") {
+                          // mode_decision + base_execute + analysis = 3 decisions
+                          minCalls = 3 * perDecision
+                          maxCalls = 3 * perDecision
+                          typeNote = "Base node — direct execution, no recursive expansion."
+                        } else if (selectedNode.caseType === "recursive") {
+                          // mode + plan + refine×children + merge + analysis
+                          // Plus a rough multiplier for each child's own pipeline
+                          const thisNode = (4 + knownChildren) * perDecision
+                          minCalls = thisNode
+                          maxCalls = thisNode + knownChildren * 3 * perDecision
+                          typeNote = `Recursive node — ${knownChildren > 0 ? `${knownChildren} known children` : "unknown children count"}, each child runs its own pipeline.`
+                        } else {
+                          minCalls = 2 * perDecision
+                          maxCalls = 4 * perDecision
+                          typeNote = "Node type undetermined — estimate is a rough lower bound."
+                        }
+
+                        // Colour-code the estimate badge by severity
+                        const level = maxCalls <= 15 ? "low" : maxCalls <= 45 ? "medium" : "high"
+                        const levelStyle = {
+                          low:    "border-green-500/40 bg-green-500/10 text-green-400",
+                          medium: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+                          high:   "border-red-500/40 bg-red-500/10 text-red-400",
+                        }[level]
+                        const levelIcon = level === "low" ? "✓" : level === "medium" ? "⚠" : "⚠"
+
+                        // Helper for the +/- size stepper buttons
+                        const Stepper = ({
+                          label, value, min, max, parentValue, onChange,
+                        }: {
+                          label: string; value: number; min: number; max: number
+                          parentValue: number; onChange: (n: number) => void
+                        }) => (
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[10px] text-muted-foreground">{label}</span>
+                              <span className="ml-1.5 text-[9px] text-muted-foreground/50">(parent: {parentValue})</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => onChange(Math.max(min, value - 1))}
+                                disabled={value <= min}
+                                className="h-5 w-5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 disabled:opacity-30 text-xs leading-none"
+                              >−</button>
+                              <span className="w-4 text-center text-xs font-mono tabular-nums">{value}</span>
+                              <button
+                                onClick={() => onChange(Math.min(max, value + 1))}
+                                disabled={value >= max}
+                                className="h-5 w-5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 disabled:opacity-30 text-xs leading-none"
+                              >+</button>
+                            </div>
+                          </div>
+                        )
+
+                        return (
+                          <div
+                            ref={forkPanelRef}
+                            className={`rounded-md border border-primary/30 bg-primary/5 p-3 space-y-3 mt-1 transition-shadow ${forkHighlight ? "ring-2 ring-primary/60" : ""}`}
+                          >
+
+                            {/* Header */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-primary text-sm">⑂</span>
+                              <span className="text-[10px] font-semibold text-primary uppercase tracking-wider">Fork from here</span>
+                            </div>
+
+                            {/* ── Caution block ──────────────────────────────── */}
+                            <div className={`rounded border ${levelStyle} p-2 space-y-1.5`}>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider">
+                                  {levelIcon} Estimated cost
+                                </span>
+                                {/* Live call count — updates as the sliders change */}
+                                <span className="font-mono text-xs">
+                                  {minCalls === maxCalls ? `~${minCalls}` : `~${minCalls}–${maxCalls}`} agent calls
+                                </span>
+                              </div>
+                              <p className="text-[10px] leading-relaxed opacity-90">{typeNote}</p>
+                              <ul className="text-[10px] opacity-80 space-y-0.5 list-none pl-0">
+                                <li>• Each agent call = one LLM request charged to your API key.</li>
+                                <li>• Ancestor context is text-only — no extra calls, just longer prompts.</li>
+                                <li>• The fork is capped at 20 nodes total to limit runaway expansion.</li>
+                                {level === "high" && (
+                                  <li className="font-medium">• Consider reducing consortium or jury size below.</li>
+                                )}
+                              </ul>
+                            </div>
+
+                            {/* ── Agent-count controls ───────────────────────── */}
+                            <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-2">
+                              <p className="text-[10px] text-muted-foreground font-medium">Agent counts for this fork</p>
+                              <Stepper
+                                label="Consortium size"
+                                value={forkConsortiumSize}
+                                min={1} max={6}
+                                parentValue={consortiumSize}
+                                onChange={setForkConsortiumSize}
+                              />
+                              <Stepper
+                                label="Jury size"
+                                value={forkJurySize}
+                                min={1} max={4}
+                                parentValue={jurySize}
+                                onChange={setForkJurySize}
+                              />
+                            </div>
+
+                            {/* ── Goal textarea ──────────────────────────────── */}
+                            <div className="space-y-1">
+                              <p className="text-[10px] text-muted-foreground">
+                                Goal <span className="opacity-60">(edit to try a different approach)</span>
+                              </p>
+                              <textarea
+                                value={forkGoalOverride}
+                                onChange={e => setForkGoalOverride(e.target.value)}
+                                rows={3}
+                                placeholder="Edit the goal for this fork…"
+                                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
+                              />
+                            </div>
+
+                            {/* Inline error — shown when the backend rejects the request */}
+                            {forkError && (
+                              <p className="text-[10px] text-red-400 rounded border border-red-500/30 bg-red-500/10 px-2 py-1">
+                                {forkError}
+                              </p>
+                            )}
+
+                            <button
+                              onClick={() => forkRun(selectedNode.id, selectedNode.goal || "")}
+                              disabled={forkLoading || !forkGoalOverride.trim()}
+                              className="w-full rounded-md border border-primary/50 bg-primary/15 px-3 py-1.5 text-xs font-medium text-primary
+                                         hover:bg-primary/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {forkLoading ? "Forking…" : `Fork · ~${minCalls === maxCalls ? minCalls : `${minCalls}–${maxCalls}`} calls`}
+                            </button>
+                          </div>
+                        )
+                      })()}
+
+                      {/* ── Replay panel — shown on ALL completed nodes (success OR failed) ──
+                          Re-runs the node's exact goal as a fresh isolated execution in the
+                          background. The current session graph stays untouched.              */}
+                      {!selectedNode.active && (() => {
+                        // Compute the status that applies to THIS specific node —
+                        // guards against stale state from a previously replayed node.
+                        const thisStatus = replayForNodeId === selectedNode.id ? replayStatus : "idle"
+                        const thisOutput = replayForNodeId === selectedNode.id ? replayOutput : null
+                        const isFailed = !selectedNode.success
+
+                        const perDecision = replayConsortiumSize + replayJurySize
+                        // ~3 decisions: mode_decide + base_execute + analysis
+                        const estCalls = 3 * perDecision
+
+                        // +/- stepper — same pattern as fork panel
+                        const Stepper = ({
+                          label, value, min, max, parentValue, onChange,
+                        }: {
+                          label: string; value: number; min: number; max: number
+                          parentValue: number; onChange: (n: number) => void
+                        }) => (
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[10px] text-muted-foreground">{label}</span>
+                              <span className="ml-1.5 text-[9px] text-muted-foreground/50">(parent: {parentValue})</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min || thisStatus === "running"}
+                                className="h-5 w-5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 disabled:opacity-30 text-xs leading-none">−</button>
+                              <span className="w-4 text-center text-xs font-mono tabular-nums">{value}</span>
+                              <button onClick={() => onChange(Math.min(max, value + 1))} disabled={value >= max || thisStatus === "running"}
+                                className="h-5 w-5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 disabled:opacity-30 text-xs leading-none">+</button>
+                            </div>
+                          </div>
+                        )
+
+                        // Parent node lookup (used by "Go to parent → Fork")
+                        const parentLink = graphLinks.find(l => l.target === selectedNode.id && l.edgeType === "parallel")
+                        const parentRafNode = parentLink
+                          ? graphNodes.find(n => n.id === parentLink.source && n.type === "raf-node") ?? null
+                          : null
+
+                        const handleCopyOutput = () => {
+                          if (!thisOutput) return
+                          navigator.clipboard.writeText(thisOutput).then(() => {
+                            setReplayCopied(true)
+                            setTimeout(() => setReplayCopied(false), 2000)
+                          }).catch(err => console.error("[replay] clipboard write failed:", err))
+                        }
+
+                        const handleForkFromHere = () => {
+                          setForkGoalOverride(selectedNode.goal || "")
+                          setForkHighlight(true)
+                          setTimeout(() => setForkHighlight(false), 1800)
+                          forkPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+                        }
+
+                        const handleGoToParent = () => {
+                          if (parentRafNode) setSelectedNode(parentRafNode)
+                        }
+
+                        const handleAddToPipeline = () => {
+                          const prefix = thisOutput
+                            ? `Context from replay of "${(selectedNode.goal || "").slice(0, 60)}": ${thisOutput.slice(0, 120)}\n\nGoal: `
+                            : `Based on replay of "${(selectedNode.goal || "").slice(0, 60)}":\n\n`
+                          setPipelineOpen(true)
+                          setPipelineSteps(prev => [
+                            ...prev,
+                            { id: `step-${Date.now()}`, goal: prefix },
+                          ])
+                        }
+
+                        return (
+                          <div className={`rounded-md border p-3 space-y-3 mt-1 ${
+                            isFailed
+                              ? "border-amber-500/30 bg-amber-500/5"
+                              : "border-border/40 bg-muted/10"
+                          }`}>
+
+                            {/* Header */}
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm">↺</span>
+                                <span className={`text-[10px] font-semibold uppercase tracking-wider ${isFailed ? "text-amber-400" : "text-muted-foreground"}`}>
+                                  {isFailed ? "Retry this node" : "Replay this node"}
+                                </span>
+                              </div>
+                              {/* Live status badge */}
+                              {thisStatus === "running" && (
+                                <span className="text-[10px] text-blue-400 animate-pulse">Running…</span>
+                              )}
+                              {thisStatus === "done" && (
+                                <span className="text-[10px] text-green-400">✓ Done</span>
+                              )}
+                              {thisStatus === "error" && (
+                                <span className="text-[10px] text-red-400">✕ Failed</span>
+                              )}
+                            </div>
+
+                            {/* Description */}
+                            <p className="text-[10px] text-muted-foreground leading-relaxed">
+                              {isFailed
+                                ? "Re-runs this node's goal fresh — useful when a model call failed or the output was poor."
+                                : "Re-runs this node's goal as a clean attempt. Runs in the background; your current graph stays visible."}
+                            </p>
+
+                            {/* Agent count controls — hidden when already running */}
+                            {thisStatus === "idle" && (
+                              <div className="rounded-md border border-border/50 bg-muted/20 p-2 space-y-2">
+                                <p className="text-[10px] text-muted-foreground font-medium">
+                                  Agent counts · ~{estCalls} calls · 1 node cap
+                                </p>
+                                <Stepper label="Consortium" value={replayConsortiumSize} min={1} max={6} parentValue={consortiumSize} onChange={setReplayConsortiumSize} />
+                                <Stepper label="Jury" value={replayJurySize} min={1} max={4} parentValue={jurySize} onChange={setReplayJurySize} />
+                              </div>
+                            )}
+
+                            {/* Output preview when done */}
+                            {thisStatus === "done" && thisOutput && (
+                              <div className="rounded bg-green-500/10 border border-green-500/20 px-2 py-1.5 text-[10px] text-green-300 font-mono whitespace-pre-wrap">
+                                {thisOutput.slice(0, 200)}{thisOutput.length > 200 ? "…" : ""}
+                              </div>
+                            )}
+
+                            {/* ── "Use this result" options — shown only when done ── */}
+                            {thisStatus === "done" && (
+                              <div className="space-y-1.5">
+                                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Use this result</p>
+                                <div className="grid grid-cols-2 gap-1.5">
+
+                                  {/* 1 — Copy output */}
+                                  <button
+                                    onClick={handleCopyOutput}
+                                    disabled={!thisOutput}
+                                    className="flex flex-col items-start gap-0.5 rounded-md border border-border/50 bg-muted/10 px-2 py-1.5 text-left hover:border-primary/40 hover:bg-muted/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                  >
+                                    <span className="text-[10px] font-medium text-foreground">
+                                      {replayCopied ? "✓ Copied!" : "Copy output"}
+                                    </span>
+                                    <span className="text-[9px] text-muted-foreground leading-snug">Save text to clipboard</span>
+                                  </button>
+
+                                  {/* 2 — Fork from here */}
+                                  <button
+                                    onClick={handleForkFromHere}
+                                    className="flex flex-col items-start gap-0.5 rounded-md border border-border/50 bg-muted/10 px-2 py-1.5 text-left hover:border-primary/40 hover:bg-muted/20 transition-colors"
+                                  >
+                                    <span className="text-[10px] font-medium text-foreground">Fork from here</span>
+                                    <span className="text-[9px] text-muted-foreground leading-snug">Branch with new goal</span>
+                                  </button>
+
+                                  {/* 3 — Go to parent → Fork */}
+                                  <button
+                                    onClick={handleGoToParent}
+                                    disabled={!parentRafNode}
+                                    className="flex flex-col items-start gap-0.5 rounded-md border border-border/50 bg-muted/10 px-2 py-1.5 text-left hover:border-primary/40 hover:bg-muted/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                    title={parentRafNode ? `Go to ${parentRafNode.goal?.slice(0, 40)}` : "No parent raf-node found"}
+                                  >
+                                    <span className="text-[10px] font-medium text-foreground">Go to parent</span>
+                                    <span className="text-[9px] text-muted-foreground leading-snug">Select parent node to fork</span>
+                                  </button>
+
+                                  {/* 4 — Add to pipeline */}
+                                  <button
+                                    onClick={handleAddToPipeline}
+                                    className="flex flex-col items-start gap-0.5 rounded-md border border-border/50 bg-muted/10 px-2 py-1.5 text-left hover:border-primary/40 hover:bg-muted/20 transition-colors"
+                                  >
+                                    <span className="text-[10px] font-medium text-foreground">Add to pipeline</span>
+                                    <span className="text-[9px] text-muted-foreground leading-snug">Chain into next step</span>
+                                  </button>
+
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Action buttons */}
+                            <div className="flex gap-2">
+                              {(thisStatus === "idle" || thisStatus === "error") && (
+                                <button
+                                  onClick={() => replayNode(selectedNode.id, selectedNode.goal || "")}
+                                  disabled={!selectedNode.goal?.trim()}
+                                  className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                                    isFailed
+                                      ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                                      : "border-border/50 bg-muted/20 text-muted-foreground hover:text-foreground hover:border-primary/40"
+                                  }`}
+                                >
+                                  {thisStatus === "error" ? "Retry again" : `${isFailed ? "Retry" : "Replay"} · ~${estCalls} calls`}
+                                </button>
+                              )}
+                              {thisStatus === "done" && (
+                                <button
+                                  onClick={viewReplayResult}
+                                  className="flex-1 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 hover:bg-green-500/20 transition-colors"
+                                >
+                                  View full result
+                                </button>
+                              )}
+                              {thisStatus === "done" && (
+                                <button
+                                  onClick={() => { setReplayStatus("idle"); setReplayForNodeId(null); setReplayCopied(false) }}
+                                  className="rounded-md border border-border/40 px-2 py-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                                  title="Reset replay panel"
+                                >↺</button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </>
                   )}
 
@@ -3112,6 +4067,28 @@ export default function App() {
           <PhysicsPanel physics={physics} onChange={setPhysics} />
         </div>
       </div>
+
+      {/* ══ PIPELINE PANEL ════════════════════════════════════════════════════════
+           Floating draggable panel for Goal Chaining.
+           Rendered at the root so it floats above the graph and work panel.   */}
+      {pipelineOpen && (
+        <PipelinePanel
+          steps={pipelineSteps}
+          results={pipelineResults}
+          running={pipelineRunning}
+          currentStepIdx={pipelineStepIdx}
+          panelPos={pipelinePanelPos}
+          onStepsChange={setPipelineSteps}
+          onRun={runPipeline}
+          onCancel={cancelPipeline}
+          onViewStep={viewPipelineStep}
+          onClose={() => setPipelineOpen(false)}
+          onPointerDown={startPipelinePanelDrag}
+          onPointerMove={movePipelinePanelDrag}
+          onPointerUp={endPipelinePanelDrag}
+          onPointerCancel={endPipelinePanelDrag}
+        />
+      )}
 
       {/* ══ EXPAND MODAL ══════════════════════════════════════════════════════════ */}
       {expandModal && (
