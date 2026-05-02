@@ -336,13 +336,26 @@ For local development, copy `.env.example` into `.env` and adjust values as need
 
 ## Research Foundations
 
-This project draws from several fields.
+Two papers directly informed the architecture of what is built today.
 
-**Cognitive science.** Tulving's distinction between semantic memory (knowing facts) and episodic memory (remembering experiences) informs the memory system design. Anderson's ACT-R activation model, Howard and Kahana's Temporal Context Model, and DeepMind's MERLIN architecture all contribute to how memory formation and retrieval are designed.
+**Meyerson et al. (2025) — "Solving a Million-Step LLM Task with Zero Errors"** (arXiv:2511.09030, Cognisant AI Lab). This paper introduces MAKER, a system that solves tasks of extreme length through extreme decomposition into subtasks handled by focused microagents, combined with multi-agent voting for error correction at each step. RAF's core loop — recursive decomposition, Consortium proposal, Jury voting — is grounded in this work.
 
-**Computer science.** Relative memory space is directly analogous to lexical variable scoping. Capability-based security models inform the tiered secret vault. Monte Carlo Tree Search informs tree-shaped memory formation at points of uncertainty.
+**Zhang, Kraska, Khattab (2025) — "Recursive Language Models"** (arXiv:2512.24601, MIT CSAIL). This paper proposes allowing LLMs to recursively call themselves to process inputs far beyond their context window, treating long prompts as an external environment to decompose and recombine. RAF's recursive node structure and context refinement layer draw directly from this framing.
 
-**Recent AI research.** Pink et al. (2025) on episodic memory for long-term LLM agents, A-MEM (NeurIPS 2025) on Zettelkasten-style agent memory, Zep (2025) on temporal knowledge graphs, and MemGPT (2023) on virtual context management all contribute to the memory system direction.
+---
+
+### Planned research foundations for Layer 2 (Experiential Memory)
+
+The following works inform the design of the memory system, which is not yet implemented.
+
+- **Tulving** — distinction between semantic memory (facts) and episodic memory (experiences with context)
+- **Anderson's ACT-R** — activation-based memory retrieval model
+- **Howard and Kahana's Temporal Context Model** — how temporal context shapes memory encoding and recall
+- **DeepMind's MERLIN** — memory and retrieval architecture for long-horizon agents
+- **Pink et al. (2025)** — episodic memory for long-term LLM agents
+- **A-MEM (NeurIPS 2025)** — Zettelkasten-style agent memory
+- **Zep (2025)** — temporal knowledge graphs for agent memory
+- **MemGPT (2023)** — virtual context management for extended agent sessions
 
 ---
 
