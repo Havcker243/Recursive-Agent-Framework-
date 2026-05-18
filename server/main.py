@@ -375,8 +375,6 @@ def publish_run(
     if not expected_admin_token or body.admin_token != expected_admin_token:
         raise HTTPException(status_code=403, detail="invalid admin token")
     run_state = _require_run_token(run_id, x_run_token)
-    if run_state.status != "done":
-        raise HTTPException(status_code=400, detail="only successful completed runs can be published")
     try:
         public_run = public_runs.publish_run(run_state)
     except RuntimeError as exc:

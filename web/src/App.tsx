@@ -1889,7 +1889,7 @@ export default function App() {
   }
 
   const publishCurrentRun = async () => {
-    if (!runId || !runToken || runStatus !== "done" || !adminToken.trim()) return
+    if (!runId || !runToken || !adminToken.trim()) return
     setPublishing(true)
     setPublishMessage(null)
     try {
@@ -4180,7 +4180,7 @@ export default function App() {
             physics={physics}
             onChange={setPhysics}
             adminToken={adminToken}
-            publishEnabled={runStatus === "done" && Boolean(runId && runToken)}
+            publishEnabled={Boolean(runId && runToken)}
             publishing={publishing}
             publishMessage={publishMessage}
             onAdminTokenChange={setAdminToken}
