@@ -87,3 +87,27 @@ class PublicRunStore:
         response.raise_for_status()
         rows = response.json()
         return rows[0] if rows else payload
+
+    def publish_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.enabled:
+            raise RuntimeError("Supabase public-run storage is not configured.")
+        payload = {
+            "id": snapshot["id"],
+            "goal": snapshot["goal"],
+            "provider": snapshot["provider"],
+            "model": snapshot.get("model"),
+            "status": snapshot["status"],
+            "result": snapshot.get("result"),
+            "events": snapshot.get("events", []),
+            "created_at": snapshot["created_at"],
+            "event_count": len(snapshot.get("events", [])),
+        }
+        response = httpx.post(
+            f"{self.url}/rest/v1/public_runs",
+            headers=self._headers(json_body=True),
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        return rows[0] if rows else payload

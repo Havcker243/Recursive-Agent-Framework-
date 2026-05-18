@@ -1889,14 +1889,25 @@ export default function App() {
   }
 
   const publishCurrentRun = async () => {
-    if (!runId || !runToken || !adminToken.trim()) return
+    if (!runId || !adminToken.trim()) return
     setPublishing(true)
     setPublishMessage(null)
     try {
-      const res = await fetch(`${API_BASE}/api/run/${runId}/publish`, {
+      const currentSession = sessions.find(session => session.id === activeSessionId)
+      const res = await fetch(`${API_BASE}/api/public-runs/publish-snapshot`, {
         method: "POST",
-        headers: authHeaders(runToken, true),
-        body: JSON.stringify({ admin_token: adminToken }),
+        headers: authHeaders(undefined, true),
+        body: JSON.stringify({
+          admin_token: adminToken,
+          id: runId,
+          goal,
+          provider,
+          model: model || null,
+          status: runStatus,
+          result: runResult ? { output: runResult } : null,
+          events,
+          created_at: currentSession ? currentSession.ts / 1000 : Date.now() / 1000,
+        }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -4180,7 +4191,7 @@ export default function App() {
             physics={physics}
             onChange={setPhysics}
             adminToken={adminToken}
-            publishEnabled={Boolean(runId && runToken)}
+            publishEnabled={Boolean(runId)}
             publishing={publishing}
             publishMessage={publishMessage}
             onAdminTokenChange={setAdminToken}

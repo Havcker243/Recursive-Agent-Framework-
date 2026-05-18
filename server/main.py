@@ -120,6 +120,18 @@ class PublishRunRequest(BaseModel):
     admin_token: str
 
 
+class PublishSnapshotRequest(BaseModel):
+    admin_token: str
+    id: str
+    goal: str
+    provider: str
+    model: str | None = None
+    status: str
+    result: Dict[str, Any] | None = None
+    events: List[Dict[str, Any]]
+    created_at: float
+
+
 app = FastAPI()
 manager = RunManager()
 public_runs = PublicRunStore()
@@ -381,6 +393,21 @@ def publish_run(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         logger.exception("Failed to publish run %s: %s", run_id, exc)
+        raise HTTPException(status_code=502, detail="public run store unavailable") from exc
+    return {"ok": True, "run": public_run}
+
+
+@app.post("/api/public-runs/publish-snapshot")
+def publish_snapshot(body: PublishSnapshotRequest) -> Dict[str, Any]:
+    expected_admin_token = os.getenv("RAF_ADMIN_TOKEN")
+    if not expected_admin_token or body.admin_token != expected_admin_token:
+        raise HTTPException(status_code=403, detail="invalid admin token")
+    try:
+        public_run = public_runs.publish_snapshot(body.model_dump(exclude={"admin_token"}))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        logger.exception("Failed to publish run snapshot %s: %s", body.id, exc)
         raise HTTPException(status_code=502, detail="public run store unavailable") from exc
     return {"ok": True, "run": public_run}
 
