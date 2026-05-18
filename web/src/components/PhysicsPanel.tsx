@@ -1,17 +1,33 @@
 import { useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 import { Slider } from './ui/slider'
-import { ChevronDown, ChevronRight, Info, Settings2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Info, KeyRound, Settings2 } from 'lucide-react'
 import { type PhysicsParams, DEFAULT_PHYSICS } from './ExecutionGraph'
 
 interface Props {
   physics: PhysicsParams
   onChange: (p: PhysicsParams) => void
+  adminToken: string
+  publishEnabled: boolean
+  publishing: boolean
+  publishMessage: string | null
+  onAdminTokenChange: (value: string) => void
+  onPublish: () => void
 }
 
-export function PhysicsPanel({ physics, onChange }: Props) {
+export function PhysicsPanel({
+  physics,
+  onChange,
+  adminToken,
+  publishEnabled,
+  publishing,
+  publishMessage,
+  onAdminTokenChange,
+  onPublish,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
   const [pos, setPos] = useState({ left: Math.max(16, window.innerWidth - 272), top: Math.max(16, window.innerHeight - 72) })
   const dragRef = useRef<{ x: number; y: number; left: number; top: number; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
@@ -126,6 +142,41 @@ export function PhysicsPanel({ physics, onChange }: Props) {
               <p><span className="font-semibold text-foreground">Outward Expansion</span> pushes the graph away from the center. Safe range: 60-130.</p>
               <p><span className="font-semibold text-foreground">Collide Padding</span> prevents nodes from overlapping. Safe range: 20-45.</p>
               <p><span className="font-semibold text-foreground">Alpha / Velocity Decay</span> controls how fast movement settles. Higher values calm the graph faster.</p>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setShowAdmin(v => !v)}
+            className="mb-3 flex w-full items-center justify-between rounded-md border border-border/70 bg-background/35 px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          >
+            <span className="flex items-center gap-1.5">
+              <KeyRound className="h-3.5 w-3.5 text-primary" />
+              Admin publish
+            </span>
+            {showAdmin ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+
+          {showAdmin && (
+            <div className="mb-3 space-y-2 rounded-md border border-border/70 bg-background/35 p-2">
+              <input
+                type="password"
+                value={adminToken}
+                onChange={e => onAdminTokenChange(e.target.value)}
+                placeholder="Admin token"
+                className="h-8 w-full rounded border border-border bg-background px-2 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={onPublish}
+                disabled={!publishEnabled || publishing || !adminToken.trim()}
+                className="w-full rounded border border-border bg-muted px-2 py-1.5 text-xs transition-colors hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {publishing ? "Publishing" : "Publish current run"}
+              </button>
+              {publishMessage && (
+                <p className="text-[10px] leading-relaxed text-muted-foreground">{publishMessage}</p>
+              )}
             </div>
           )}
 

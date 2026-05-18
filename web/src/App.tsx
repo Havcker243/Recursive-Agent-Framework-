@@ -2965,34 +2965,6 @@ export default function App() {
             </Button>
           </div>
 
-          {runStatus === "done" && runId && runToken && (
-            <div className="space-y-2 rounded-md border border-border/60 bg-accent/20 p-2">
-              <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Publish successful run</p>
-              <div className="flex gap-2">
-                <Input
-                  type="password"
-                  value={adminToken}
-                  onChange={e => setAdminToken(e.target.value)}
-                  placeholder="Admin token"
-                  className="h-8 font-mono text-xs"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8 gap-1.5"
-                  disabled={!adminToken.trim() || publishing}
-                  onClick={publishCurrentRun}
-                >
-                  <Link2 className="h-3.5 w-3.5" />
-                  {publishing ? "Publishing" : "Publish"}
-                </Button>
-              </div>
-              {publishMessage && (
-                <p className="text-[10px] leading-4 text-muted-foreground">{publishMessage}</p>
-              )}
-            </div>
-          )}
-
           {/* Clarification card */}
           <AnimatePresence>
             {clarifyQuestion && (
@@ -4204,7 +4176,16 @@ export default function App() {
           </AnimatePresence>
 
           {/* Physics Tuner — bottom-right collapsible overlay */}
-          <PhysicsPanel physics={physics} onChange={setPhysics} />
+          <PhysicsPanel
+            physics={physics}
+            onChange={setPhysics}
+            adminToken={adminToken}
+            publishEnabled={runStatus === "done" && Boolean(runId && runToken)}
+            publishing={publishing}
+            publishMessage={publishMessage}
+            onAdminTokenChange={setAdminToken}
+            onPublish={publishCurrentRun}
+          />
         </div>
       </div>
 
