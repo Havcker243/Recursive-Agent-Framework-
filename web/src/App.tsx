@@ -74,10 +74,19 @@ type ServerRunSummary = {
   completed_at?: number | null
   event_count: number
 }
+type PublicRunSummary = {
+  id: string
+  goal: string
+  provider: string
+  model?: string | null
+  status: string
+  created_at: number
+  published_at?: string | null
+  event_count: number
+}
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8001"
 const SESSION_STORAGE_KEY = "raf-web-sessions-v1"
-const API_KEY_STORAGE_KEY = "raf-openrouter-api-key"
 const DOMAIN_OPTIONS = ["", "technical", "culinary", "fitness", "creative", "business", "academic", "general"]
 
 function authHeaders(runToken?: string | null, json = false): Record<string, string> {
@@ -438,8 +447,8 @@ export default function App() {
   // landing page — shown once per session; dismissed on "Launch App" / "Try Demo"
   const [showLanding, setShowLanding] = useState<boolean>(() => !sessionStorage.getItem("raf-entered"))
 
-  // api key (user-supplied, persisted in localStorage)
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(API_KEY_STORAGE_KEY) || "")
+  // User-supplied API key is intentionally kept only in memory so a reload clears it.
+  const [apiKey, setApiKey] = useState("")
 
   // run config
   const [goal, setGoal] = useState("")
@@ -477,6 +486,7 @@ export default function App() {
   const [timelineFilter, setTimelineFilter] = useState<"all" | "node" | "vote" | "execution" | "model" | "error">("all")
   const [sessions, setSessions] = useState<Session[]>(() => loadStoredSessions())
   const [serverRuns, setServerRuns] = useState<ServerRunSummary[]>([])
+  const [publicRuns, setPublicRuns] = useState<PublicRunSummary[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -503,6 +513,9 @@ export default function App() {
   const [partialFailures, setPartialFailures] = useState(0)
   const [staleWarning, setStaleWarning] = useState(false)
   const [lastEventAge, setLastEventAge] = useState<number | null>(null)
+  const [adminToken, setAdminToken] = useState("")
+  const [publishing, setPublishing] = useState(false)
+  const [publishMessage, setPublishMessage] = useState<string | null>(null)
 
   // Fork state — controls the fork panel shown inside the node inspector
   // when the user selects a completed raf-node and wants to branch from it.
@@ -656,9 +669,24 @@ export default function App() {
     }
   }, [])
 
+  const refreshPublicRuns = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/public-runs`)
+      if (!res.ok) return
+      const data = await res.json() as { runs?: PublicRunSummary[] }
+      setPublicRuns(data.runs || [])
+    } catch (err) {
+      console.warn("[runs] Failed to fetch public run list:", err)
+      setPublicRuns([])
+    }
+  }, [])
+
   useEffect(() => {
-    if (backendStatus === "connected") refreshServerRuns()
-  }, [backendStatus, refreshServerRuns])
+    if (backendStatus === "connected") {
+      refreshServerRuns()
+      refreshPublicRuns()
+    }
+  }, [backendStatus, refreshServerRuns, refreshPublicRuns])
 
   useEffect(() => {
     try {
@@ -1157,6 +1185,7 @@ export default function App() {
       setPendingPlan(null); setNodeCount(0)
       setCurrentPhase("Starting")
       setRunToken(null)
+      setPublishMessage(null)
       setPartialFailures(0); setStaleWarning(false); setLastEventAge(null)
       lastEventTsRef.current = 0
       runStartRef.current = null
@@ -1817,6 +1846,73 @@ export default function App() {
     }
   }
 
+  const replayPublicRun = async (summary: PublicRunSummary) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/public-runs/${summary.id}`)
+      if (!res.ok) return
+      const data = await res.json() as {
+        id: string
+        goal: string
+        provider: string
+        status: string
+        result?: { output?: string } | null
+        events?: RafEvent[]
+      }
+      const replayEvents = data.events || []
+
+      graphNodesRef.current = []; graphLinksRef.current = []
+      seenEventsRef.current = new Set()
+      satelliteEventsRef.current = []
+      planChildrenRef.current = {}
+      planChildNodeRef.current = {}
+      nodeCreatedTsRef.current = {}
+      setGraphNodes([]); setGraphLinks([]); setEvents([]); setNodeOutputs(new Map())
+      setRunResult(data.result?.output || null)
+      setDetectedDomain(null); setSelectedNode(null); setPendingPlan(null)
+      setNodeCount(0); setCurrentPhase("Replayed")
+      setRunId(data.id)
+      setRunToken(null)
+      setRunStatus((data.status as typeof runStatus) || "done")
+      setGoal(data.goal)
+      setProvider(data.provider)
+      runStartRef.current = replayEvents.find(ev => ev.timestamp)?.timestamp
+        ? replayEvents.find(ev => ev.timestamp)!.timestamp! * 1000
+        : null
+
+      replayEvents.forEach(ev => processEvent(ev))
+      setCenterTab("timeline")
+      setWorkPanelOpen(true)
+    } catch (err) {
+      console.error("[replay] Failed to replay public run", summary.id, err)
+      setRunStatus("error")
+    }
+  }
+
+  const publishCurrentRun = async () => {
+    if (!runId || !runToken || runStatus !== "done" || !adminToken.trim()) return
+    setPublishing(true)
+    setPublishMessage(null)
+    try {
+      const res = await fetch(`${API_BASE}/api/run/${runId}/publish`, {
+        method: "POST",
+        headers: authHeaders(runToken, true),
+        body: JSON.stringify({ admin_token: adminToken }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error((data as { detail?: string }).detail || "publish failed")
+      }
+      setPublishMessage("Published to public runs.")
+      setAdminToken("")
+      refreshPublicRuns()
+    } catch (err) {
+      console.error("[publish] Failed to publish run", runId, err)
+      setPublishMessage(err instanceof Error ? err.message : "publish failed")
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   // Fetch freshest server state before exporting; falls back to local state on error
   const fetchFreshExportData = async (): Promise<{ freshEvents: RafEvent[]; freshResult: string | null; freshStatus: string }> => {
     if (!runId) return { freshEvents: events, freshResult: runResult, freshStatus: runStatus }
@@ -2367,6 +2463,25 @@ export default function App() {
                 ))}
                 <div className="pt-2 mt-2 border-t border-border">
                   <div className="flex items-center justify-between px-1 pb-1">
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Public runs</p>
+                    <button onClick={refreshPublicRuns} className="text-[10px] text-primary hover:underline">refresh</button>
+                  </div>
+                  {publicRuns.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground px-1 py-2">No public runs available.</p>
+                  )}
+                  {publicRuns.slice(0, 8).map(r => (
+                    <button key={r.id} onClick={() => replayPublicRun(r)}
+                      className="w-full text-left px-2.5 py-2 rounded-md transition-colors hover:bg-accent/40">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-green-500" />
+                        <span className="text-xs font-medium truncate flex-1">{r.goal || r.id}</span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground pl-3">{r.event_count} events</div>
+                    </button>
+                  ))}
+                </div>
+                <div className="pt-2 mt-2 border-t border-border">
+                  <div className="flex items-center justify-between px-1 pb-1">
                     <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Server runs</p>
                     <button onClick={refreshServerRuns} className="text-[10px] text-primary hover:underline">refresh</button>
                   </div>
@@ -2553,18 +2668,15 @@ export default function App() {
                       <label className="text-[10px] text-muted-foreground font-medium">OpenRouter API Key</label>
                       <Input
                         type="password"
-                        placeholder="sk-or-v1-…  (stored locally, never sent to our servers)"
+                        placeholder="sk-or-v1-…  (clears when you reload)"
                         value={apiKey}
-                        onChange={e => {
-                          setApiKey(e.target.value)
-                          localStorage.setItem(API_KEY_STORAGE_KEY, e.target.value)
-                        }}
+                        onChange={e => setApiKey(e.target.value)}
                         disabled={running}
                         className="font-mono text-xs h-7"
                       />
                       <p className="text-[10px] leading-4 text-muted-foreground">
-                        Paste your own OpenRouter key here. It stays in this browser via local storage and is sent only
-                        with your run request.
+                        Paste your own OpenRouter key here. It is sent only with your run request and clears when you
+                        reload the page.
                       </p>
                       <p className="text-[10px] leading-4 text-muted-foreground">
                         Need one? Open <span className="font-mono">openrouter.ai/keys</span>, create a key, copy it,
@@ -2852,6 +2964,34 @@ export default function App() {
               Demo
             </Button>
           </div>
+
+          {runStatus === "done" && runId && runToken && (
+            <div className="space-y-2 rounded-md border border-border/60 bg-accent/20 p-2">
+              <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Publish successful run</p>
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={adminToken}
+                  onChange={e => setAdminToken(e.target.value)}
+                  placeholder="Admin token"
+                  className="h-8 font-mono text-xs"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5"
+                  disabled={!adminToken.trim() || publishing}
+                  onClick={publishCurrentRun}
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  {publishing ? "Publishing" : "Publish"}
+                </Button>
+              </div>
+              {publishMessage && (
+                <p className="text-[10px] leading-4 text-muted-foreground">{publishMessage}</p>
+              )}
+            </div>
+          )}
 
           {/* Clarification card */}
           <AnimatePresence>

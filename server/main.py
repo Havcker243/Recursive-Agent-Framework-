@@ -7,6 +7,9 @@ from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconne
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import httpx
+
+from server.public_runs import PublicRunStore
 from server.run_manager import RunManager
 
 logger = logging.getLogger(__name__)
@@ -113,8 +116,13 @@ class ForkRequest(BaseModel):
     max_nodes_total: int | None = None
 
 
+class PublishRunRequest(BaseModel):
+    admin_token: str
+
+
 app = FastAPI()
 manager = RunManager()
+public_runs = PublicRunStore()
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -334,6 +342,49 @@ def list_runs() -> Dict[str, Any]:
     if not _env_flag("RAF_ENABLE_RUN_LIST", default=False):
         raise HTTPException(status_code=404, detail="run list disabled")
     return {"runs": manager.list_runs()}
+
+
+@app.get("/api/public-runs")
+def list_public_runs() -> Dict[str, Any]:
+    try:
+        return {"runs": public_runs.list_runs()}
+    except httpx.HTTPError as exc:
+        logger.exception("Failed to list public runs: %s", exc)
+        raise HTTPException(status_code=502, detail="public run store unavailable") from exc
+
+
+@app.get("/api/public-runs/{run_id}")
+def get_public_run(run_id: str) -> Dict[str, Any]:
+    try:
+        run = public_runs.get_run(run_id)
+    except httpx.HTTPError as exc:
+        logger.exception("Failed to fetch public run %s: %s", run_id, exc)
+        raise HTTPException(status_code=502, detail="public run store unavailable") from exc
+    if not run:
+        raise HTTPException(status_code=404, detail="public run not found")
+    return run
+
+
+@app.post("/api/run/{run_id}/publish")
+def publish_run(
+    run_id: str,
+    body: PublishRunRequest,
+    x_run_token: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    expected_admin_token = os.getenv("RAF_ADMIN_TOKEN")
+    if not expected_admin_token or body.admin_token != expected_admin_token:
+        raise HTTPException(status_code=403, detail="invalid admin token")
+    run_state = _require_run_token(run_id, x_run_token)
+    if run_state.status != "done":
+        raise HTTPException(status_code=400, detail="only successful completed runs can be published")
+    try:
+        public_run = public_runs.publish_run(run_state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        logger.exception("Failed to publish run %s: %s", run_id, exc)
+        raise HTTPException(status_code=502, detail="public run store unavailable") from exc
+    return {"ok": True, "run": public_run}
 
 
 @app.websocket("/api/stream/{run_id}")
