@@ -175,6 +175,8 @@ app.add_middleware(
 )
 
 
+# ── Utility / discovery ───────────────────────────────────────────────────────
+
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {"ok": True}
@@ -184,6 +186,13 @@ def health() -> Dict[str, Any]:
 def models() -> Dict[str, Any]:
     return manager.list_models()
 
+
+# ── Run lifecycle ─────────────────────────────────────────────────────────────
+# POST /api/run          — create and start a new run; returns run_id + access_token
+# GET  /api/run/{id}     — poll run status (requires X-Run-Token header)
+# GET  /api/run/{id}/events — replay all stored events after a disconnect
+# POST /api/run/{id}/cancel — cooperative stop signal
+# WS   /api/run/{id}/stream — live event stream (token in query param)
 
 @app.post("/api/run")
 def run(request: RunRequest) -> Dict[str, Any]:
@@ -348,6 +357,11 @@ def fork_run(
     }
 
 
+# ── Run history / public gallery ──────────────────────────────────────────────
+# /api/runs            — recent run list (disabled by default; RAF_ENABLE_RUN_LIST=true to enable)
+# /api/public-runs     — published showcase runs (no auth required)
+# /api/run/{id}/publish — mark a completed run as public via admin token
+
 @app.get("/api/runs")
 def list_runs() -> Dict[str, Any]:
     """Return metadata for recent runs (most recent first)."""
@@ -411,6 +425,10 @@ def publish_snapshot(body: PublishSnapshotRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail="public run store unavailable") from exc
     return {"ok": True, "run": public_run}
 
+
+# ── WebSocket live stream ──────────────────────────────────────────────────────
+# Drains the run's event queue in real time. Token validated via query param.
+# Frontend reconnects and replays from /api/run/{id}/events on disconnect.
 
 @app.websocket("/api/stream/{run_id}")
 async def stream(run_id: str, websocket: WebSocket) -> None:

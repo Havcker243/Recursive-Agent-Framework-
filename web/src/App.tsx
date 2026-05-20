@@ -978,6 +978,11 @@ export default function App() {
     }
   }, [])
 
+  // ── Event processing ──────────────────────────────────────────────────────────
+  // processEvent: handles one trace event from the server — updates graph, session, and phase label.
+  // Called from both the live WebSocket stream and the replay path after a reconnect.
+  // All state updates are batched into refs first; setGraphNodes/setGraphLinks flush to React.
+
   // process a single event — deduplicated so reconnect replay is idempotent
   const processEvent = useCallback((ev: RafEvent) => {
     const key = `${ev.event ?? ev.status ?? ""}:${ev.node_id ?? ""}:${String(ev.timestamp ?? "")}`
@@ -1140,6 +1145,11 @@ export default function App() {
       addSatelliteNodes(ev)
     }
   }, [addGraphNode, updateGraphNode, addDependencyEdgesForParent])
+
+  // ── WebSocket / run lifecycle ──────────────────────────────────────────────────
+  // connectWs: opens the WebSocket to /api/run/{id}/stream and feeds events to processEvent.
+  // On close it does a fetch-based replay from /api/run/{id}/events so nothing is lost.
+  // startRun: validates input, POSTs to /api/run, then hands the run_id to connectWs.
 
   // websocket connection
   const connectWs = useCallback((rid: string, token: string) => {
@@ -2875,14 +2885,31 @@ export default function App() {
 
                 <ParamGroup label="Controls">
                   <div className="space-y-3">
-                    {([
-                      [toolsEnabled, setToolsEnabled, "Enable tools (web_search, http_get)"] as const,
-                    ]).map(([val, setter, label]) => (
-                      <div key={label} className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">{label}</span>
-                        <Switch checked={val} onCheckedChange={v => setter(v)} disabled={running} />
+                    {/* Tools toggle + directory — always show what tools are available */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Enable tools</span>
+                        <Switch checked={toolsEnabled} onCheckedChange={setToolsEnabled} disabled={running} />
                       </div>
-                    ))}
+                      {/* Tool cards: agents can call any of these when tools are on */}
+                      <div className="rounded border border-border/50 bg-muted/20 px-2 py-2 space-y-1.5">
+                        {([
+                          { name: "web_search", desc: "Search the web via DuckDuckGo — no API key needed" },
+                          { name: "http_get",   desc: "Fetch any public URL; private/local IPs are blocked" },
+                          { name: "run_python", desc: "Execute Python snippets; dangerous patterns are blocked" },
+                        ] as const).map(t => (
+                          <div key={t.name} className="flex items-start gap-2">
+                            <span className={`shrink-0 font-mono text-[9px] rounded px-1 py-0.5 mt-0.5 transition-colors ${toolsEnabled ? "bg-emerald-950/60 text-emerald-300" : "bg-muted/60 text-muted-foreground/50"}`}>
+                              {t.name}
+                            </span>
+                            <span className={`text-[10px] leading-tight transition-colors ${toolsEnabled ? "text-muted-foreground" : "text-muted-foreground/40"}`}>{t.desc}</span>
+                          </div>
+                        ))}
+                        {!toolsEnabled && (
+                          <p className="text-[9px] text-muted-foreground/35 pt-0.5">Toggle on to let agents call these during execution.</p>
+                        )}
+                      </div>
+                    </div>
                     <ConfigSection label="Plan governance">
                       <Select
                         value={planGovernance}
