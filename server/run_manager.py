@@ -271,6 +271,30 @@ class RunManager:
         # Two providers: "openrouter" for all cloud models, "mock" for local testing.
         all_models: Dict[str, List[str]] = {
             "mock": ["mock-deterministic"],
+            "claude": [
+                "claude-opus-4-7",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5-20251001",
+            ],
+            "gemini": [
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+            ],
+            "groq": [
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+                "mixtral-8x7b-32768",
+                "gemma2-9b-it",
+            ],
+            "deepseek": [
+                "deepseek-chat",
+                "deepseek-reasoner",
+            ],
+            "huggingface": [
+                "meta-llama/Llama-3.1-70B-Instruct",
+                "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            ],
             "openrouter": [
                 "openai/gpt-4.1",
                 "openai/gpt-4.1-mini",
@@ -289,13 +313,12 @@ class RunManager:
                 "qwen/qwen3.6-plus",
                 "qwen/qwen3.5-35b-a3b",
                 "qwen/qwen3.5-9b",
-                "z-ai/glm-5.1",
                 "stepfun/step-3.5-flash:free",
                 "nvidia/nemotron-3-super-120b-a12b:free",
                 "nvidia/nemotron-nano-12b-v2-vl:free",
                 "qwen/qwen3-next-80b-a3b-instruct:free",
+                "qwen/qwen3-next-80b-a3b-thinking",
                 "qwen/qwen3-coder:free",
-                "liquid/lfm-2.5-1.2b-thinking:free",
                 "arcee-ai/trinity-large-preview:free",
                 "google/gemma-4-26b-a4b-it:free",
                 "z-ai/glm-4.5-air:free",
@@ -318,10 +341,21 @@ class RunManager:
             for provider, provider_models in all_models.items()
         }
 
-        # All non-mock providers are available — users supply their own API key via the UI.
-        available: List[str] = list(all_models.keys())
+        # A provider is "available" if its API key env var is set.
+        # Mock is always available. The frontend uses this to dim providers with no key.
+        key_vars = {
+            "claude": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "huggingface": "HUGGINGFACE_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        available: List[str] = ["mock"] + [
+            p for p in key_vars if os.getenv(key_vars[p]) or os.getenv("DEEPSEEKER_API_KEY" if p == "deepseek" else "")
+        ]
 
-        priority = ["openrouter", "mock"]
+        priority = ["openrouter", "gemini", "claude", "groq", "deepseek", "mock"]
         default_provider = next((p for p in priority if p in available), "mock")
         default_model = all_models[default_provider][0]
 
@@ -376,9 +410,54 @@ class RunManager:
             resolved_key = api_key or os.getenv("OPENROUTER_API_KEY")
             if not resolved_key:
                 raise RuntimeError("An OpenRouter API key is required. Paste yours into the key field in the UI.")
-            model_name = model or "stepfun/step-3.5-flash:free"
+            model_name = model or "qwen/qwen3-next-80b-a3b-instruct:free"
             temperature = float(os.getenv("OPENROUTER_TEMPERATURE", "0.2"))
             return OpenRouterAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
+
+        if name == "claude":
+            from raf.llm.claude_adapter import ClaudeAdapter
+            resolved_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+            if not resolved_key:
+                raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to your .env or paste it in the UI.")
+            model_name = model or os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+            temperature = float(os.getenv("CLAUDE_TEMPERATURE", "0.2"))
+            return ClaudeAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
+
+        if name == "gemini":
+            from raf.llm.gemini_adapter import GeminiAdapter
+            resolved_key = api_key or os.getenv("GEMINI_API_KEY")
+            if not resolved_key:
+                raise RuntimeError("GEMINI_API_KEY is not set. Add it to your .env or paste it in the UI.")
+            model_name = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
+            return GeminiAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
+
+        if name == "groq":
+            from raf.llm.groq_adapter import GroqAdapter
+            resolved_key = api_key or os.getenv("GROQ_API_KEY")
+            if not resolved_key:
+                raise RuntimeError("GROQ_API_KEY is not set. Add it to your .env or paste it in the UI.")
+            model_name = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+            temperature = float(os.getenv("GROQ_TEMPERATURE", "0.2"))
+            return GroqAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
+
+        if name == "deepseek":
+            from raf.llm.deepseek_adapter import DeepSeekAdapter
+            resolved_key = api_key or os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEKER_API_KEY")
+            if not resolved_key:
+                raise RuntimeError("DEEPSEEK_API_KEY is not set. Add it to your .env or paste it in the UI.")
+            model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+            temperature = float(os.getenv("DEEPSEEK_TEMPERATURE", "0.2"))
+            return DeepSeekAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
+
+        if name == "huggingface":
+            from raf.llm.huggingface_adapter import HuggingFaceAdapter
+            resolved_key = api_key or os.getenv("HUGGINGFACE_API_KEY")
+            if not resolved_key:
+                raise RuntimeError("HUGGINGFACE_API_KEY is not set. Add it to your .env or paste it in the UI.")
+            model_name = model or os.getenv("HUGGINGFACE_MODEL", "meta-llama/Llama-3.1-70B-Instruct")
+            temperature = float(os.getenv("HUGGINGFACE_TEMPERATURE", "0.2"))
+            return HuggingFaceAdapter(api_key=resolved_key, model_name=model_name, temperature=temperature)
 
         return MockAdapter()
 

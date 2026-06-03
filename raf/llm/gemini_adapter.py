@@ -25,7 +25,10 @@ class GeminiAdapter(PromptBasedAdapter):
         response = self.client.models.generate_content(
             model=self.model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(temperature=temperature),
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                http_options=types.HttpOptions(timeout=120_000),  # ms — fail fast after sleep/network drop
+            ),
         )
         # Report actual token counts when available; fall back to char-length estimate.
         usage = getattr(response, "usage_metadata", None)

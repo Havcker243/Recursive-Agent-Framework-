@@ -27,5 +27,11 @@ class DeepSeekAdapter(PromptBasedAdapter):
             temperature=temperature,
             max_tokens=4096,
             response_format={"type": "json_object"},
+            timeout=120,
         )
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "prompt_tokens", None) or len(prompt) // 4
+        tokens_out = getattr(usage, "completion_tokens", None) or len(content) // 4
+        self._report_usage(tokens_in, tokens_out)
+        return content

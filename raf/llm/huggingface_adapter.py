@@ -47,4 +47,9 @@ class HuggingFaceAdapter(PromptBasedAdapter):
         response = requests.post(self.url, json=body, headers=headers, timeout=120)
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"] or ""
+        content = data["choices"][0]["message"]["content"] or ""
+        usage = data.get("usage", {})
+        tokens_in = usage.get("prompt_tokens") or len(prompt) // 4
+        tokens_out = usage.get("completion_tokens") or len(content) // 4
+        self._report_usage(tokens_in, tokens_out)
+        return content

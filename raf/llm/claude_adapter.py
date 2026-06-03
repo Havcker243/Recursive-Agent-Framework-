@@ -26,5 +26,11 @@ class ClaudeAdapter(PromptBasedAdapter):
             max_tokens=4096,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
+            timeout=120,
         )
-        return response.content[0].text if response.content else ""
+        content = response.content[0].text if response.content else ""
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "input_tokens", None) or len(prompt) // 4
+        tokens_out = getattr(usage, "output_tokens", None) or len(content) // 4
+        self._report_usage(tokens_in, tokens_out)
+        return content

@@ -447,8 +447,12 @@ export default function App() {
   // landing page — shown once per session; dismissed on "Launch App" / "Try Demo"
   const [showLanding, setShowLanding] = useState<boolean>(() => !sessionStorage.getItem("raf-entered"))
 
-  // User-supplied API key is intentionally kept only in memory so a reload clears it.
-  const [apiKey, setApiKey] = useState("")
+  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem("raf-api-key") ?? "")
+
+  useEffect(() => {
+    if (apiKey) localStorage.setItem("raf-api-key", apiKey)
+    else localStorage.removeItem("raf-api-key")
+  }, [apiKey])
 
   // run config
   const [goal, setGoal] = useState("")
@@ -500,6 +504,16 @@ export default function App() {
   const [runId, setRunId] = useState<string | null>(null)
   const [runToken, setRunToken] = useState<string | null>(null)
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error" | "cancelled">("idle")
+
+  // Persist active run credentials across page refreshes so we can reconnect
+  useEffect(() => {
+    if (runId) sessionStorage.setItem("raf-run-id", runId)
+    else sessionStorage.removeItem("raf-run-id")
+  }, [runId])
+  useEffect(() => {
+    if (runToken) sessionStorage.setItem("raf-run-token", runToken)
+    else sessionStorage.removeItem("raf-run-token")
+  }, [runToken])
   const [events, setEvents] = useState<RafEvent[]>([])
   const [nodeOutputs, setNodeOutputs] = useState<Map<string, NodeOutput>>(new Map())
   const [runResult, setRunResult] = useState<string | null>(null)
@@ -1170,11 +1184,37 @@ export default function App() {
     ws.onclose = () => {
       if (!isRunningRef.current) return
       const attempts = reconnectAttemptsRef.current
-      if (attempts >= 6) return
+      if (attempts >= 10) return
       reconnectAttemptsRef.current = attempts + 1
       setTimeout(() => { if (isRunningRef.current) connectWs(rid, token) }, Math.min(500 * Math.pow(2, attempts), 16000))
     }
   }, [processEvent])
+
+  // On page load, check sessionStorage for a run that was in-progress before the refresh.
+  // If the server says it's still running, reconnect the WebSocket automatically.
+  useEffect(() => {
+    const storedId = sessionStorage.getItem("raf-run-id")
+    const storedToken = sessionStorage.getItem("raf-run-token")
+    if (!storedId || !storedToken) return
+    fetch(`${API_BASE}/api/run/${storedId}`, { headers: authHeaders(storedToken) })
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { status: string } | null) => {
+        if (data?.status === "running") {
+          setRunId(storedId)
+          setRunToken(storedToken)
+          setRunStatus("running")
+          isRunningRef.current = true
+          connectWs(storedId, storedToken)
+        } else {
+          sessionStorage.removeItem("raf-run-id")
+          sessionStorage.removeItem("raf-run-token")
+        }
+      })
+      .catch(() => {
+        sessionStorage.removeItem("raf-run-id")
+        sessionStorage.removeItem("raf-run-token")
+      })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // start run
   // continueSession=true: clarification continuation — preserve existing timeline/graph,
@@ -1182,6 +1222,14 @@ export default function App() {
   const startRun = async (goalText: string, skipClarify = false, continueSession = false) => {
     if (!goalText.trim()) return
     const runGoal = goalText.trim()
+
+    // Guard: prevent accidentally killing an in-progress run
+    if (runStatus === "running" && !continueSession) {
+      const ok = window.confirm("A run is already in progress. Cancel it and start a new one?")
+      if (!ok) return
+      if (runId) await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) })
+      isRunningRef.current = false
+    }
 
     if (!continueSession) {
       graphNodesRef.current = []; graphLinksRef.current = []
@@ -2686,18 +2734,20 @@ export default function App() {
 
                   {provider !== "mock" && (
                     <div className="space-y-1">
-                      <label className="text-[10px] text-muted-foreground font-medium">OpenRouter API Key</label>
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-muted-foreground font-medium">OpenRouter API Key</label>
+                        {apiKey && <span className="text-[10px] text-green-500 font-medium">✓ saved</span>}
+                      </div>
                       <Input
                         type="password"
-                        placeholder="sk-or-v1-…  (clears when you reload)"
+                        placeholder="sk-or-v1-…"
                         value={apiKey}
                         onChange={e => setApiKey(e.target.value)}
                         disabled={running}
                         className="font-mono text-xs h-7"
                       />
                       <p className="text-[10px] leading-4 text-muted-foreground">
-                        Paste your own OpenRouter key here. It is sent only with your run request and clears when you
-                        reload the page.
+                        Saved to your browser — survives refreshes and window resets. Clear the field to remove it.
                       </p>
                       <p className="text-[10px] leading-4 text-muted-foreground">
                         Need one? Open <span className="font-mono">openrouter.ai/keys</span>, create a key, copy it,

@@ -79,10 +79,16 @@ class GroqAdapter(PromptBasedAdapter):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
             "max_tokens": 4096,
+            "timeout": 120,
         }
         # Only enable JSON mode for models that support it
         if self.model_name in _JSON_MODE_MODELS:
             kwargs["response_format"] = {"type": "json_object"}
 
         response = self.client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        tokens_in = getattr(usage, "prompt_tokens", None) or len(prompt) // 4
+        tokens_out = getattr(usage, "completion_tokens", None) or len(content) // 4
+        self._report_usage(tokens_in, tokens_out)
+        return content

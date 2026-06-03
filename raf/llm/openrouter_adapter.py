@@ -49,19 +49,17 @@ _JSON_MODE_MODELS = {
 # before answering — reasoning tokens are hidden from response content
 # so JSON output is unaffected.
 _REASONING_MODELS = {
-    # stepfun/step-3.5-flash:free removed — 404 "No endpoints found" on OpenRouter
+    # Confirmed by user from OpenRouter docs
+    "google/gemma-4-26b-a4b-it:free",
+    "qwen/qwen3.5-35b-a3b",
+    "qwen/qwen3-next-80b-a3b-thinking",   # separate from instruct:free — thinking variant
+    # Unconfirmed — user to verify these are still live
     "nvidia/nemotron-3-super-120b-a12b:free",
     "nvidia/nemotron-nano-12b-v2-vl:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
     "qwen/qwen3-coder:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
-    # New reasoning models (extra_body={"reasoning":{"enabled":True}})
-    "z-ai/glm-5.1",
-    "google/gemma-4-26b-a4b-it:free",
     "qwen/qwen3.6-plus",
     "openai/gpt-5.4-nano",
     "qwen/qwen3.5-9b",
-    "qwen/qwen3.5-35b-a3b",
     "moonshotai/kimi-k2-thinking",
     "x-ai/grok-4.1-fast",
     "openai/gpt-oss-120b:free",
@@ -114,6 +112,7 @@ class OpenRouterAdapter(PromptBasedAdapter):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
             "max_tokens": 4096,
+            "timeout": 120,  # fail fast after sleep/network drop rather than hanging forever
         }
         # Enable JSON mode only for models known to support it via OpenRouter.
         if self.model_name in _JSON_MODE_MODELS:
