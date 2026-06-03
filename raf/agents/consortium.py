@@ -132,7 +132,7 @@ class Consortium:
             agent_payload["_agent_total"] = self.size
             started = time.time()
             if self.trace:
-                self.trace.log({
+                start_log: Dict[str, Any] = {
                     "event": "model_call_start",
                     "node_id": self.node_id,
                     "depth": self.depth,
@@ -142,13 +142,16 @@ class Consortium:
                     "model": meta["model"],
                     "agent_index": i,
                     "attempt": 1,
-                })
+                }
+                if payload.get("child_id"):
+                    start_log["child_id"] = payload["child_id"]
+                self.trace.log(start_log)
             try:
                 result = call_json_with_repair(
                     adapter, self.task, agent_payload, validator, self.retry_limit
                 )
                 if self.trace:
-                    self.trace.log({
+                    done_log: Dict[str, Any] = {
                         "event": "model_call_done",
                         "node_id": self.node_id,
                         "depth": self.depth,
@@ -159,7 +162,10 @@ class Consortium:
                         "agent_index": i,
                         "attempt": 1,
                         "duration_ms": int((time.time() - started) * 1000),
-                    })
+                    }
+                    if payload.get("child_id"):
+                        done_log["child_id"] = payload["child_id"]
+                    self.trace.log(done_log)
                 return result
             except Exception as exc:
                 if self.trace:

@@ -134,6 +134,80 @@ Format: date | category | description | cause | fix | status
 
 ---
 
+### BUG-016 — Supabase inserts may silently fail with new opaque key format
+- **Category:** Backend / Supabase
+- **Cause:** `_headers()` in `public_runs.py` only set `Authorization: Bearer` for JWT keys (`eyJ...`). New Supabase opaque keys (`sb_secret_...`) only got the `apikey` header. Without `Authorization`, the service role cannot bypass RLS, so `publish_run()` inserts would fail silently because there is no anon INSERT policy on `public_runs`.
+- **Reported via:** Supabase dashboard log showing `relation "supabase_migrations.schema_migrations" does not exist` — investigation revealed the auth header gap
+- **Fix:** Always set `Authorization: Bearer <key>` regardless of key format. Added `service_role` INSERT and UPDATE policies to `supabase-public-runs.sql` as a safety net.
+- **Note:** The dashboard migration error itself is harmless — it means the `public_runs` table was created manually (not via Supabase CLI), so the CLI migration history table doesn't exist. This does not affect the application.
+- **Status:** Fixed
+
+---
+
+### BUG-017 — refine_context using full consortium+jury for every child (massive cost overrun)
+- **Category:** Engine / Cost
+- **Discovered:** Trace analysis — job tracker: 145/279 model calls were refinement; GitHub dashboard: 235/603
+- **Cause:** `_refine_children()` created a full Consortium+Jury and called them for every planned child regardless of whether the goal needed sharpening. 9 children × (3 consortium + 3 jury) = 54 model calls before real work began.
+- **Fix:** Replaced full Consortium+Jury with a single cheap model call per child. Added `_needs_refinement()` gate — children with specific goals (≥12 words, no dependencies) are accepted as-is with zero model calls. Only vague or dependency-bearing children get the single-model refinement.
+- **Status:** Fixed
+
+---
+
+### BUG-018 — Run marked "done" when root node produced no output (false success state)
+- **Category:** Engine / State
+- **Discovered:** Traces showing `status: "done"`, `hasRunDone: true`, `hasRootNodeDone: false`, `result: null` simultaneously
+- **Affected:** Job application tracker, Multi-tenant API, Customer support dashboard
+- **Cause:** `run.status = "done"` was set whenever `engine.run()` returned without raising an exception — even if the return value was None or empty (e.g. root merge failed silently, or a child failure blocked parent finalization)
+- **Fix:** Now checks `result and result.get("output")` before marking done. If root returned but produced no output, status is set to `"error"` with an explicit message. Cancelled runs still get `"cancelled"`.
+- **Status:** Fixed
+
+---
+
+### BUG-019 — child_id missing from model_call_start/done during refinement
+- **Category:** Observability / Tracing
+- **Discovered:** Trace analysis — many `task: "refine_context", node_id: "root"` events with no context showing which child was being refined, making it look like duplicate model calls
+- **Cause:** `consortium.py` `model_call_start`/`model_call_done` log events did not include `child_id` even when it was present in the payload
+- **Fix:** Both log events in `consortium.py` now extract `child_id` from payload and include it when present. Refinement events in `node.py` also log `child_id` directly.
+- **Status:** Fixed
+
+---
+
+### BUG-020 — Models returning tool_call name="none" or name="" creating noisy log entries
+- **Category:** Engine / Tool Handling
+- **Discovered:** Trace analysis — GitHub dashboard trace showed blocked tools including "execute_sql", "sql_schema_generator", "none", and empty tool names even with tools disabled
+- **Cause:** Some models return `tool_call: {"name": "none"}` when they don't want a tool — this was not filtered before logging, creating spurious `tool_blocked` events
+- **Fix:** Added guard: if `tool_name` is empty, "none", "null", or "n/a" after stripping, treat as no-op and break the tool loop silently. Also the existing `tools_enabled` check already prevents tool processing when disabled.
+- **Status:** Fixed
+
+---
+
+### BUG-021 — Deprecated/rate-limited models cause cascading run failures (no circuit breaker)
+- **Category:** Engine / Reliability
+- **Discovered:** Customer support trace failed immediately — grok-4.1-fast deprecated, OpenRouter recommends grok-4.3. GitHub dashboard had many failures from rate limits (429) and insufficient credits (402).
+- **Cause:** No pre-flight model check, no circuit breaker — a deprecated or rate-limited model keeps being retried until the run exhausts retries and fails
+- **Fix:** Pending — circuit breaker and model health check not yet implemented
+- **Status:** Open
+
+---
+
+### BUG-022 — Export config does not match models that actually ran
+- **Category:** Observability / Export
+- **Discovered:** One trace showed `multiModel: false, consortiumSlots: []` in config but events showed Gemini, Llama, Mistral, O3 Mini all running
+- **Cause:** Session export saved only the UI state config (`currentConfig()`), not the resolved runtime config. These diverge when presets, tier routing, or server-side defaults are applied.
+- **Fix:** Extended `run_started` event in `RafEngine.run()` to include `resolved_runtime_config` with actual model names/providers for consortium, jury, leaf, mid, and root slots. Frontend captures this in `processEvent` and stores it as `resolvedRuntimeConfig` state. Export now includes both `requestedConfig` (what the UI sent) and `resolvedRuntimeConfig` (what actually ran).
+- **Status:** Fixed
+
+---
+
+### BUG-023 — One failed child blocks entire parent merge
+- **Category:** Engine / Resilience
+- **Discovered:** Multiple traces showing leaf `node_done` events and `merge_done` for some nodes, but root never finalizing — `result: null`
+- **Cause:** Failed children were tracked in `completed` with error placeholder output. All children including failures were passed to the merge consortium. If all children failed, merge tried to synthesize `"[child X failed: Y]"` strings, producing garbage or failing itself, leaving the root stuck with `result: null`.
+- **Fix:** Added `failed_cids` set tracking which children explicitly errored. Before merge, splits children into successful and failed. Only merges successful outputs. If zero successful children, raises a clear `RuntimeError` instead of silently returning None. Emits `partial_child_failure` trace event when some children fail but merge proceeds. Passes `failed_children` context into merge payload so the merger knows what was missed.
+- **Status:** Fixed
+
+---
+
 ## Open / Unconfirmed
 
 | ID | Issue | Status |

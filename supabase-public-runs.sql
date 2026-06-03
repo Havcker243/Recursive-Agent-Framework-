@@ -18,3 +18,17 @@ on public.public_runs
 for select
 to anon, authenticated
 using (true);
+
+-- Service role bypasses RLS automatically, but this policy ensures
+-- inserts work even if the Authorization header is not a JWT.
+create policy "service role can insert runs"
+on public.public_runs
+for insert
+to service_role
+with check (true);
+
+create policy "service role can update runs"
+on public.public_runs
+for update
+to service_role
+using (true);

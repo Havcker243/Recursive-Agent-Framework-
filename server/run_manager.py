@@ -733,7 +733,15 @@ class RunManager:
             )
             result = engine.run(run.goal)
             run.result = result
-            run.status = "cancelled" if run.cancel_event.is_set() else "done"
+            if run.cancel_event.is_set():
+                run.status = "cancelled"
+            elif result and result.get("output"):
+                run.status = "done"
+            else:
+                # Root node returned but produced no output — treat as incomplete
+                # rather than "done" so the frontend doesn't show a false success.
+                run.status = "error"
+                run.error = "Run finished but root node produced no output. A child may have failed silently or the merge step did not complete."
         except Exception as exc:
             run.status = "error"
             run.error = str(exc)

@@ -19,11 +19,12 @@ class PublicRunStore:
     def _headers(self, *, json_body: bool = False) -> Dict[str, str]:
         headers = {
             "apikey": self.key,
+            # Always include Authorization so the service role bypasses RLS
+            # regardless of whether the key is a JWT (eyJ...) or an opaque
+            # secret (sb_secret_...). Without this, INSERT/UPDATE calls fail
+            # silently when no anon INSERT policy exists on the table.
+            "Authorization": f"Bearer {self.key}",
         }
-        # Supabase's new secret keys are opaque rather than JWTs, so the
-        # apikey header is the portable auth mechanism across both key styles.
-        if self.key.startswith("eyJ"):
-            headers["Authorization"] = f"Bearer {self.key}"
         if json_body:
             headers["Content-Type"] = "application/json"
             headers["Prefer"] = "return=representation,resolution=merge-duplicates"

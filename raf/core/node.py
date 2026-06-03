@@ -813,8 +813,12 @@ class RafNode:
             if not tool_call or not isinstance(tool_call, dict) or "name" not in tool_call:
                 break
 
-            tool_name = tool_call.get("name", "")
+            tool_name = (tool_call.get("name") or "").strip()
             tool_args = tool_call.get("args", {})
+            # Models sometimes return name="none" or name="" when they don't
+            # actually want a tool — treat these as no-op to keep logs clean.
+            if not tool_name or tool_name.lower() in {"none", "null", "n/a", ""}:
+                break
             if tool_name not in self.engine.config.available_tools:
                 self.engine.trace.log(
                     {
@@ -987,6 +991,7 @@ class RafNode:
         refined_children = self._refine_children(plan["children"])
         child_map = {child["child_id"]: child for child in refined_children}
         completed: Dict[str, Dict[str, Any]] = {}
+        failed_cids: set = set()  # tracks which children explicitly errored
         deps_map: Dict[str, List[str]] = {
             child["child_id"]: list(child.get("depends_on", [])) for child in refined_children
         }
@@ -1036,7 +1041,7 @@ class RafNode:
                     try:
                         completed[cid] = future.result()
                     except Exception as exc:
-                        # Re-raise cancellations; treat other failures as empty output
+                        # Re-raise cancellations; treat other failures as partial output
                         if "cancelled" in str(exc).lower():
                             raise
                         self.engine.trace.log(
@@ -1048,6 +1053,7 @@ class RafNode:
                                 "error": str(exc),
                             }
                         )
+                        failed_cids.add(cid)
                         completed[cid] = {"output": f"[child {cid} failed: {exc}]", "metadata": {"mode": "base", "confidence": 0.0}}
                     done_ids.append(cid)
                     break
@@ -1065,13 +1071,36 @@ class RafNode:
                             ):
                                 ready.append(child_id)
 
-        # Include child_id in each output entry so the merger can attribute
-        # sections back to specific children in the structured merge contract.
+        # Separate successful children from failed ones.
+        # Only merge successful outputs — feeding failure placeholders into the
+        # merge prompt causes the merger to produce garbage or fail itself.
+        successful_cids = [cid for cid in order if cid in completed and cid not in failed_cids]
+        failed_summary = [
+            {"child_id": cid, "error": completed.get(cid, {}).get("output", "unknown error")}
+            for cid in order if cid in failed_cids
+        ]
+
+        if not successful_cids:
+            failed_descriptions = "; ".join(f"{c['child_id']}: {c['error'][:120]}" for c in failed_summary)
+            raise RuntimeError(
+                f"All {len(failed_cids)} children failed — cannot merge. Failures: {failed_descriptions}"
+            )
+
+        if failed_summary:
+            self.engine.trace.log({
+                "node_id": self.node_id,
+                "depth": self.depth,
+                "event": "partial_child_failure",
+                "successful": successful_cids,
+                "failed": [c["child_id"] for c in failed_summary],
+                "merging_partial": True,
+            })
+
         # _compress_output() substitutes key_points summaries for long outputs
         # to prevent token-limit blowouts in runs with many or large children.
         child_outputs = [
             {"child_id": cid, "output": self._compress_output(completed[cid])}
-            for cid in order if cid in completed
+            for cid in successful_cids
         ]
         merge_payload = {
             **self._base_context(),
@@ -1084,6 +1113,7 @@ class RafNode:
             "ancestors": self.ancestors[-5:],
             "constraints": self._constraints(),
             "system_prompt": self.engine.config.system_prompt,
+            **({"failed_children": failed_summary} if failed_summary else {}),
         }
 
         # ── Merge: Consortium + Jury (decision point 5 — combine child outputs) ──
@@ -1535,38 +1565,56 @@ class RafNode:
         )
         return winner
 
+    @staticmethod
+    def _needs_refinement(child: Dict[str, Any]) -> bool:
+        """Return True only when the child goal genuinely benefits from refinement.
+
+        Refinement is skipped for goals that are already specific — this is the
+        single biggest cost driver (traces showed >50% of model calls were
+        refine_context calls using full consortium+jury for every child).
+        """
+        goal = child.get("goal", "")
+        words = goal.split()
+        has_deps = bool(child.get("depends_on"))
+        # Refine when: goal is short/vague OR child has deps that need context injection
+        return len(words) < 12 or has_deps
+
     def _refine_children(self, children: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        For each planned child, use Consortium + Jury to clarify its goal,
-        success criteria, and dependencies before execution begins.
+        For each planned child that needs it, sharpen its goal using a single
+        cheap model call (not a full consortium+jury).
+
+        Full consortium+jury for every child was the largest cost driver in traces:
+        9 children × (3 consortium + 3 jury) = 54 model calls before real work begins.
+        Now: one call per child that actually needs refinement, zero for clear goals.
         """
         _rc_adapters, _rj_adapters, _rtier = self._adapters_for_tier("refine_context")
-        consortium = Consortium(
-            _rc_adapters,
-            "refine_context",
-            self.engine.config.retry_limit,
-            trace=self.engine.trace,
-            node_id=self.node_id,
-            depth=self.depth,
-            timeout_s=self.engine.config.timeout_by_task.get("refine_context"),
-            fallback_adapter=self.engine.fallback_adapter,
-        )
-        jury = Jury(
-            _rj_adapters,
-            self.engine.config.retry_limit,
-            self.engine.config.system_prompt,
-            trace=self.engine.trace,
-            node_id=self.node_id,
-            depth=self.depth,
-            timeout_s=self.engine.config.timeout_by_task.get("refine_context"),
-            fallback_adapter=self.engine.fallback_adapter,
-        )
+        # Use only the first (cheapest) adapter — refinement is goal sharpening,
+        # not a high-stakes decision that needs multi-model deliberation.
+        single_adapter = (_rc_adapters[0] if isinstance(_rc_adapters, list) and _rc_adapters
+                          else _rc_adapters if not isinstance(_rc_adapters, list)
+                          else self.engine.consortium_adapters[0] if isinstance(self.engine.consortium_adapters, list)
+                          else self.engine.consortium_adapters)
 
         refined_children: List[Dict[str, Any]] = []
         for child in children:
+            if not self._needs_refinement(child):
+                # Goal is already specific enough — accept planner output as-is
+                refined_children.append(child)
+                self.engine.trace.log({
+                    "node_id": self.node_id,
+                    "depth": self.depth,
+                    "event": "child_refined",
+                    "child_id": child["child_id"],
+                    "status": "SKIPPED_CLEAR_GOAL",
+                })
+                continue
+
             payload = {
                 **self._base_context(),
                 "_raf_role": "refiner",
+                "_agent_index": 0,
+                "_agent_total": 1,
                 "child_id": child["child_id"],
                 "goal": child["goal"],
                 "depends_on": child.get("depends_on", []),
@@ -1575,30 +1623,45 @@ class RafNode:
                 "constraints": self._constraints(),
                 "system_prompt": self.engine.config.system_prompt,
             }
-            candidates = consortium.call(payload, validate_refined_child)
-            if not candidates:
-                refined_children.append(child)
-                continue
-            self.engine.trace.log(
-                {
+
+            self.engine.trace.log({
+                "event": "model_call_start",
+                "node_id": self.node_id,
+                "depth": self.depth,
+                "task": "refine_context",
+                "role": "refiner",
+                "child_id": child["child_id"],
+            })
+
+            try:
+                result = call_json_with_repair(
+                    single_adapter, "refine_context", payload,
+                    validate_refined_child, self.engine.config.retry_limit,
+                )
+                self.engine.trace.log({
+                    "event": "model_call_done",
                     "node_id": self.node_id,
                     "depth": self.depth,
-                    "status": "CONSORTIUM_CANDIDATES",
-                    "event": "consortium_candidates",
                     "task": "refine_context",
-                    "tier": _rtier,
+                    "role": "refiner",
                     "child_id": child["child_id"],
-                    "candidates": candidates,
-                }
-            )
+                })
+                refined = dict(result)
+                refined["child_id"] = child["child_id"]
+                refined["depends_on"] = list(child.get("depends_on", []))
+                refined_children.append(refined)
+            except Exception:
+                # If single-model refinement fails, keep the original planner goal
+                refined_children.append(child)
+                continue
 
-            winner, vote, votes, labeled = jury.vote(candidates, node_context={
-                **self._base_context(), "goal": child["goal"], "depth": self.depth + 1,
-            }, task="refine_context")
-            refined = dict(winner)
-            refined["child_id"] = child["child_id"]
-            refined["depends_on"] = list(child.get("depends_on", []))
-            refined_children.append(refined)
+            self.engine.trace.log({
+                "node_id": self.node_id,
+                "depth": self.depth,
+                "status": "REFINE_CHILD",
+                "child_id": child["child_id"],
+                "event": "child_refined",
+            })
 
             self.engine.trace.log(
                 {
@@ -2504,6 +2567,16 @@ class RafEngine:
         # the prompt version, schema version, and key config values so any
         # exported trace can be fully attributed without external context.
         from raf.llm.prompt_adapter import _PROMPT_VERSION
+        def _adapter_info(a) -> Dict[str, str]:
+            return {
+                "model": getattr(a, "model_name", "unknown"),
+                "provider": type(a).__name__.replace("Adapter", "").lower(),
+            }
+        def _adapter_list_info(adapters) -> list:
+            if isinstance(adapters, list):
+                return [_adapter_info(a) for a in adapters]
+            return [_adapter_info(adapters)]
+
         self.trace.log({
             "event": "run_started",
             "goal": goal,
@@ -2517,9 +2590,13 @@ class RafEngine:
                 "confidence_threshold": self.config.confidence_threshold,
                 "token_budget": self.config.token_budget,
             },
-            "adapters": {
-                "consortium_count": len(self.consortium_adapters),
-                "jury_count": len(self.jury_adapters),
+            "resolved_runtime_config": {
+                "consortium_models": _adapter_list_info(self.consortium_adapters),
+                "jury_models": _adapter_list_info(self.jury_adapters),
+                "leaf_models": _adapter_list_info(self.leaf_adapters) if self.leaf_adapters else [],
+                "mid_models": _adapter_list_info(self.mid_adapters) if self.mid_adapters else [],
+                "root_models": _adapter_list_info(self.root_adapters) if self.root_adapters else [],
+                "tier_routing": bool(self.leaf_adapters or self.mid_adapters or self.root_adapters),
             },
         })
         self.referee = Referee(goal, adapter=self.consortium_adapters[0])

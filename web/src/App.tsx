@@ -534,6 +534,7 @@ export default function App() {
   const [adminToken, setAdminToken] = useState("")
   const [publishing, setPublishing] = useState(false)
   const [publishMessage, setPublishMessage] = useState<string | null>(null)
+  const [resolvedRuntimeConfig, setResolvedRuntimeConfig] = useState<Record<string, unknown> | null>(null)
 
   // Fork state — controls the fork panel shown inside the node inspector
   // when the user selects a completed raf-node and wants to branch from it.
@@ -1027,6 +1028,10 @@ export default function App() {
     // Detect LLM / run errors from the event stream
     if (ev.error) setLlmError(String(ev.error))
     else if (ev.event === "run_done" && !ev.error) setLlmError(null)
+    // Capture resolved runtime config from the run_started event
+    if (ev.event === "run_started" && ev.resolved_runtime_config) {
+      setResolvedRuntimeConfig(ev.resolved_runtime_config as Record<string, unknown>)
+    }
     const phase = phaseForEvent(ev)
     if (phase) setCurrentPhase(phase)
     if (phase && ev.node_id) updateGraphNode(ev.node_id, { phase, active: ev.event !== "node_done" })
@@ -1318,6 +1323,7 @@ export default function App() {
       setCurrentPhase("Starting")
       setRunToken(null)
       setPublishMessage(null)
+      setResolvedRuntimeConfig(null)
       setPartialFailures(0); setStaleWarning(false); setLastEventAge(null)
       lastEventTsRef.current = 0
       runStartRef.current = null
@@ -2105,7 +2111,8 @@ export default function App() {
       hasRunDone: meta.hasRunDone,
       hasRootNodeDone: meta.hasRootNodeDone,
       note: meta.isMidRun ? "Exported mid-run. Final output may not be available yet." : undefined,
-      config: currentConfig(),
+      requestedConfig: currentConfig(),
+      resolvedRuntimeConfig: resolvedRuntimeConfig ?? null,
       physics,
       result: freshResult,
       events: freshEvents,
