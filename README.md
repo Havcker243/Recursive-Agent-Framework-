@@ -220,7 +220,7 @@ The core engine is production-ready. It is deployed. It works.
 | Optional agent tools — web_search, http_get, run_python | Complete |
 | OpenRouter adapter — 100+ models via single key | Complete |
 | Mock adapter — deterministic, no API calls | Complete |
-| Claude / DeepSeek / Gemini / Groq adapters | Written, not yet wired |
+| Claude / DeepSeek / Gemini / Groq / HuggingFace adapters | Complete |
 
 ### What Remains
 
@@ -234,7 +234,7 @@ The core engine is production-ready. It is deployed. It works.
 | Obsidian vault sync | Not started |
 | Rust substrate runtime | Not started |
 | Persistent run storage (database-backed) | Not started |
-| Full multi-provider adapter wiring | Not started |
+| Full multi-provider adapter wiring | Complete |
 
 ---
 
@@ -332,6 +332,274 @@ OPENROUTER_API_KEY=...       # optional if users supply their own key
 ```
 
 With `RAF_REQUIRE_USER_API_KEY=true`, public users paste their own OpenRouter API key into the web UI for non-mock providers. No key is stored on the server.
+
+---
+
+## How to Use
+
+This is a complete walkthrough from opening the app to reading your results.
+
+### Step 1 — Open the app
+
+Navigate to the deployed URL (or `http://localhost:5173` if running locally). You will land on the landing page. Click **Launch App** to enter the workspace, or **Try Demo** to run a pre-built Tower of Hanoi example that needs no API key.
+
+---
+
+### Step 2 — Set your API key
+
+In the **Work Panel** (the floating panel on the left side of the screen), find the **OpenRouter API Key** field. Paste your key from [openrouter.ai/keys](https://openrouter.ai/keys). The key is saved to your browser automatically — you will see a green **✓ saved** label when it is stored. You will not need to paste it again on future visits.
+
+If you do not have a key and want to test the system first, select **mock** as the provider — it runs fully offline with no API costs.
+
+---
+
+### Step 3 — Choose a provider and model
+
+Under the key field, select your **Provider** (OpenRouter, Gemini, Claude, Groq, DeepSeek, or Mock) and then pick a **Model** from the dropdown. If you are on OpenRouter:
+
+- Models marked **:free** cost nothing but may be slower
+- Models like `qwen/qwen3.5-35b-a3b` and `google/gemma-4-26b-a4b-it:free` support reasoning (the system enables this automatically)
+- The **fast-smart** preset (see Multi-Model below) gives you the best quality for the lowest cost
+
+---
+
+### Step 4 — Write your goal
+
+In the large text box at the top of the Work Panel, type what you want the system to do. Be specific. The more concrete the goal, the better the Spec extraction and the more focused the child tasks will be.
+
+Good examples:
+- `Build a REST API for a todo app with JWT authentication, PostgreSQL, and FastAPI`
+- `Write a 12-week progressive strength training plan for an intermediate lifter`
+- `Design a go-to-market strategy for a B2B SaaS product targeting HR teams`
+
+Vague examples (the system will ask a clarifying question before starting):
+- `Make me an app`
+- `Help me with fitness`
+
+---
+
+### Step 5 — Configure the run (optional)
+
+You can leave all settings at their defaults and the system will make sensible choices. But if you want control:
+
+**Basic settings (always visible):**
+
+| Setting | What it does | Default |
+|---|---|---|
+| Max Depth | How many levels deep the recursion can go. Depth 1 = root only (no children). Depth 4 = up to 4 levels of nested sub-tasks. | 4 |
+| Max Parallel Children | How many child tasks can run at the same time at any level. | 4 |
+| Max Nodes Total | Hard cap on total nodes across the entire run. Prevents runaway expansion on complex goals. | 50 |
+| Consortium Size | How many agents independently propose an answer at each decision point. More = more diversity, more cost. | 3 |
+| Jury Size | How many agents vote on proposals. More = more reliable selection, more cost. | 3 |
+
+**Plan Governance:**
+- **Auto** — the system decides whether to decompose or execute directly at every node
+- **Review** — the system pauses before executing each plan and shows you the proposed child tasks; you can edit them before approving
+- **Manual** — same as Review but you must explicitly approve every plan
+
+**Plan Recovery:**
+- **Off** — if a node fails validation, the run stops
+- **Auto** — the system automatically retries with a repair prompt
+- **Ask** — the system pauses and asks you what to do before retrying
+
+**Force Recursive** — skips the mode-decision vote at the root and always decomposes, even for simple goals.
+
+**Tools** — when enabled, agents can call `web_search`, `http_get`, and `run_python` during base execution. Useful for tasks that need live data or computation.
+
+**Domain Override** — force the system to treat your goal as a specific domain (technical, culinary, fitness, creative, business, academic). By default the system detects this automatically from the goal text.
+
+**System Prompt** — inject a custom instruction that every agent in the run will see. Useful for setting tone, constraints, or persona.
+
+---
+
+### Step 6 — Multi-model setup (optional, recommended for quality)
+
+Toggle **Multi-Model** on to configure which models fill which roles. Three preset strategies are available:
+
+**Mono** — one model does everything. Simplest, cheapest, easiest to debug. Good starting point.
+
+**Fast-Smart** — fast/cheap models generate diverse proposals in parallel (consortium). One powerful reasoning model makes the final call (jury). This is the recommended pattern for most tasks. You get near-top-model quality at a fraction of the cost because the jury only runs once per decision regardless of how many proposers you have.
+
+**Cross-Family** — different model families (Qwen, Mistral, Google, etc.) write proposals and different families vote. Maximises independence between proposers and judges. Best for high-stakes or adversarial tasks where you want no shared blind spots.
+
+**Tier Routing** — assign different models to different depths of the recursion tree:
+- **Leaf agents** — fast, cheap models for deep leaf nodes (simple sub-tasks)
+- **Mid agents** — capable models for planning and merging in the middle of the tree
+- **Root agents** — your strongest models for the root node and final analysis
+
+---
+
+### Step 7 — Run
+
+Click **Run**. The system will:
+
+1. Extract a Spec from your goal (required items, forbidden items, success criteria)
+2. Ask a clarifying question if the goal is underspecified (you can answer or skip)
+3. Begin the recursive execution — you will see nodes appear on the graph in real time
+
+The run continues on the backend server regardless of what happens in your browser. If you refresh the page, it reconnects automatically. If you close the tab and reopen it within the same browser session, it reconnects.
+
+To stop a run early, click **Cancel**.
+
+---
+
+### Step 8 — Read the results
+
+When the run completes, the final output appears in the **Output** tab. Click any node on the graph to inspect its individual goal, output, proposals, and jury votes. Use the tabs across the center panel to explore the full trace.
+
+To save or share the result, use the **Export** button (JSON or PDF). To branch from a specific node and explore a different direction, click a completed node and use the **Fork** panel.
+
+---
+
+## Understanding the Interface
+
+The interface is divided into four main areas. Here is what each one is and what you are looking at.
+
+---
+
+### Left Sidebar
+
+The sidebar has two tabs: **Sessions** and **Config**.
+
+**Sessions tab**
+
+Every run you start creates a session entry here. Sessions are saved in your browser and persist across page reloads. Each entry shows:
+- The goal text (truncated)
+- The provider and model used
+- The run status (running / done / error / cancelled)
+- The number of nodes executed
+- The current phase
+
+Clicking a session restores its full state — graph, timeline, output, and all events. If the session was still running when you left, the frontend will attempt to reconnect to it.
+
+**Config tab**
+
+Shows the current provider and model configuration. This is a read-only summary of what is set in the Work Panel.
+
+---
+
+### Work Panel
+
+The floating draggable panel in the top-left. This is where you control everything about a run before you start it. You can drag it anywhere on screen. It contains:
+
+- **Goal field** — what you want the system to do
+- **Provider / Model dropdowns** — which LLM to use
+- **API Key field** — your OpenRouter (or other provider) key, saved to browser storage
+- **Run configuration sliders** — depth, parallelism, node cap, consortium and jury sizes
+- **Plan Governance** — how much control you want over plan approval
+- **Plan Recovery** — what happens when a node fails validation
+- **Force Recursive** — skip mode-decision and always decompose
+- **Tools toggle** — enable web_search, http_get, run_python for agents
+- **Domain Override** — lock the domain classification
+- **System Prompt** — custom instruction injected into every agent call
+- **Multi-Model toggle** — configure per-slot model assignments and tier routing
+- **Run / Cancel button** — starts or stops the active run
+
+---
+
+### Center — Execution Graph
+
+The large canvas in the middle of the screen. This is a live D3 force-directed graph that shows the recursion tree as it builds in real time.
+
+**What the nodes mean:**
+
+| Node appearance | Meaning |
+|---|---|
+| Pulsing / animated border | Currently executing |
+| Solid filled | Completed successfully |
+| Red / error colour | Failed or errored |
+| Grey | Waiting for a dependency to finish |
+| Root node (top) | The original goal |
+| Child nodes | Sub-tasks the planner decomposed from the parent |
+
+**What the edges mean:**
+
+- A line from parent to child means the parent spawned that child task
+- A dotted or coloured edge between siblings means a dependency — the downstream child waits for the upstream sibling to finish and receives its output as context
+
+**Clicking a node** opens the Node Inspector on the right side. You can inspect the exact goal, the full output, all proposals from the consortium, all jury votes, and any errors.
+
+**Graph toolbar** (top of the canvas):
+- **Simplified / Full** — toggle between a clean graph showing only nodes and a detailed graph showing satellite events (individual model calls, votes)
+- **Physics** — open the physics tuner to adjust node repulsion, link strength, and gravity
+- **Zoom controls** — fit the graph to the screen or zoom manually
+- **Export** — download the result as JSON or PDF
+
+---
+
+### Center Tabs
+
+Below the graph (or alongside it depending on screen size) there are tabs that show the full run trace:
+
+**Output**
+The final merged result from the root node. This is the answer to your original goal. Formatted as readable text.
+
+**Timeline**
+Every event that happened during the run in chronological order — node created, base execution started, consortium proposals, jury votes, merge completed, analysis passed, etc. You can filter by event type:
+- **All** — everything
+- **Node** — only node lifecycle events (created, done)
+- **Vote** — only jury voting events
+- **Execution** — only base execution events
+- **Model** — only raw model call events (shows which model was called, for which role, with what result)
+- **Error** — only failures and retries
+
+**Votes**
+A summary of every jury vote in the run. For each vote you can see: the node it happened at, all candidates ranked by score, the confidence each juror assigned, and which candidate won.
+
+**Spec**
+The Frozen Spec extracted from your goal before execution began. Shows:
+- **Domain** — how the system classified your goal (technical, culinary, fitness, etc.)
+- **Task class** — what kind of task it is (implement, analyze, create, etc.)
+- **Required** — items that must appear in the final output
+- **Forbidden** — items that must not appear
+- **Success criteria** — measurable pass/fail checks used by the validator and jury
+
+This is the immutable contract that every agent in the run is measured against.
+
+**Tools**
+If tools are enabled, this shows every tool call made during the run — which node called it, which tool (`web_search`, `http_get`, or `run_python`), what arguments were passed, and what was returned.
+
+**Checks**
+The output of the two-stage spec validation that runs after each node completes:
+- Stage 1: deterministic keyword check against Required and Forbidden items
+- Stage 2: LLM semantic check for any items Stage 1 flagged as missing
+
+Shows whether each node passed, what was missing, and whether a repair was attempted.
+
+---
+
+### Node Inspector (right panel, appears on node click)
+
+When you click a node on the graph, a detailed inspector opens. It shows everything about that specific node:
+
+- **Goal** — the exact task this node was given
+- **Output** — what this node produced
+- **Mode** — whether this node executed directly (base) or decomposed into children (recursive)
+- **Confidence** — the jury's confidence in the winning output
+- **Proposals** — every candidate answer the consortium generated, with the winning one highlighted
+- **Jury votes** — how each jury agent scored the proposals, with reasoning
+- **Errors** — any failures that occurred, including validation failures and retry attempts
+- **Fork** — branch from this node: create a new independent run that starts from this node's goal with its ancestor context pre-loaded. Useful for exploring a different direction without re-running the whole tree.
+- **Replay** — re-run just this node in the background with a different model or consortium size, without affecting the rest of the run
+
+---
+
+### Pipeline Panel
+
+Accessible from the toolbar. Lets you chain multiple goals in sequence — the output of one run becomes the input of the next using `{{output}}` as a placeholder.
+
+Example chain:
+1. `Research the competitive landscape for AI coding assistants`
+2. `Based on this research, identify the top 3 gaps: {{output}}`
+3. `Write a product brief for a tool that fills the most important gap: {{output}}`
+
+Each step runs as a fully independent RAF run. The pipeline passes results forward automatically.
+
+---
+
+### Public Gallery
+
+The landing page shows a gallery of published runs. These are completed runs that have been shared publicly — you can browse them to see what kinds of goals the system handles and how the recursion tree looks for different problem types. Each gallery card links to a read-only replay of the full run.
 
 ---
 

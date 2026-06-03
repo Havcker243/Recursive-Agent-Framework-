@@ -527,6 +527,10 @@ export default function App() {
   const [partialFailures, setPartialFailures] = useState(0)
   const [staleWarning, setStaleWarning] = useState(false)
   const [lastEventAge, setLastEventAge] = useState<number | null>(null)
+  const [wsStatus, setWsStatus] = useState<"connected" | "reconnecting" | "disconnected">("disconnected")
+  const [backendOnline, setBackendOnline] = useState(true)
+  const [apiError, setApiError] = useState<{ endpoint: string; msg: string; retrying: boolean } | null>(null)
+  const [llmError, setLlmError] = useState<string | null>(null)
   const [adminToken, setAdminToken] = useState("")
   const [publishing, setPublishing] = useState(false)
   const [publishMessage, setPublishMessage] = useState<string | null>(null)
@@ -627,18 +631,33 @@ export default function App() {
     return () => obs.disconnect()
   }, [])
 
-  // live timer: update lastEventAge every second while running; stale warning every 5s
+  // live timer: update lastEventAge every second while running; stale warning after 45s
   useEffect(() => {
     const tick = window.setInterval(() => {
       if (lastEventTsRef.current > 0) {
         const age = Date.now() - lastEventTsRef.current
         setLastEventAge(Math.floor(age / 1000))
-        if (isRunningRef.current) setStaleWarning(age > 90_000)
+        if (isRunningRef.current) setStaleWarning(age > 45_000)
       } else {
         setLastEventAge(null)
       }
     }, 1000)
     return () => window.clearInterval(tick)
+  }, [])
+
+  // Backend health poller — pings /api/health every 20s and updates backendOnline
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000) })
+        setBackendOnline(r.ok)
+      } catch {
+        setBackendOnline(false)
+      }
+    }
+    check()
+    const id = setInterval(check, 20_000)
+    return () => clearInterval(id)
   }, [])
 
   // fetch providers on mount
@@ -1005,6 +1024,9 @@ export default function App() {
     setEvents(prev => [...prev, ev])
     lastEventTsRef.current = Date.now()
     setStaleWarning(false)
+    // Detect LLM / run errors from the event stream
+    if (ev.error) setLlmError(String(ev.error))
+    else if (ev.event === "run_done" && !ev.error) setLlmError(null)
     const phase = phaseForEvent(ev)
     if (phase) setCurrentPhase(phase)
     if (phase && ev.node_id) updateGraphNode(ev.node_id, { phase, active: ev.event !== "node_done" })
@@ -1168,10 +1190,11 @@ export default function App() {
   // websocket connection
   const connectWs = useCallback((rid: string, token: string) => {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close() }
+    setWsStatus("reconnecting")
     const wsUrl = API_BASE.replace(/^http/, "ws") + `/api/stream/${rid}?token=${encodeURIComponent(token)}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
-    ws.onopen = () => { reconnectAttemptsRef.current = 0 }
+    ws.onopen = () => { reconnectAttemptsRef.current = 0; setWsStatus("connected") }
     ws.onmessage = (msg) => {
       try {
         const ev: RafEvent = JSON.parse(msg.data)
@@ -1182,9 +1205,21 @@ export default function App() {
       }
     }
     ws.onclose = () => {
-      if (!isRunningRef.current) return
+      if (!isRunningRef.current) { setWsStatus("disconnected"); return }
       const attempts = reconnectAttemptsRef.current
-      if (attempts >= 10) return
+      if (attempts >= 10) {
+        // Exhausted fast retries — fall back to a slow 30s retry loop so the
+        // run can reconnect after a long sleep or extended network outage.
+        setWsStatus("disconnected")
+        setTimeout(() => {
+          if (isRunningRef.current) {
+            reconnectAttemptsRef.current = 0
+            connectWs(rid, token)
+          }
+        }, 30_000)
+        return
+      }
+      setWsStatus("reconnecting")
       reconnectAttemptsRef.current = attempts + 1
       setTimeout(() => { if (isRunningRef.current) connectWs(rid, token) }, Math.min(500 * Math.pow(2, attempts), 16000))
     }
@@ -1215,6 +1250,45 @@ export default function App() {
         sessionStorage.removeItem("raf-run-token")
       })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tracked fetch wrapper — retries on network errors, updates apiError state.
+  // Use this for all critical POST calls (start run, cancel, fork, approve).
+  // GET requests and non-critical calls can use plain fetch.
+  const apiFetch = useCallback(async (
+    url: string,
+    options: RequestInit = {},
+    maxRetries = 2,
+  ): Promise<Response> => {
+    const endpoint = url.replace(API_BASE, "")
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const r = await fetch(url, { ...options, signal: AbortSignal.timeout(15_000) })
+        setApiError(null)
+        return r
+      } catch (err) {
+        const isLast = attempt === maxRetries
+        setApiError({ endpoint, msg: String(err), retrying: !isLast })
+        if (!isLast) await new Promise(res => setTimeout(res, 1_500 * Math.pow(2, attempt)))
+        else throw err
+      }
+    }
+    throw new Error("unreachable")
+  }, [])
+
+  // Stale auto-reconnect: if no events for 45s and WS is not connected, force a reconnect.
+  // Runs every 15s so it catches issues quickly without hammering the server.
+  useEffect(() => {
+    if (runStatus !== "running") return
+    const id = setInterval(() => {
+      if (!isRunningRef.current || !runId || !runToken) return
+      const age = lastEventTsRef.current > 0 ? Date.now() - lastEventTsRef.current : null
+      if (age && age > 45_000 && wsStatus !== "connected") {
+        reconnectAttemptsRef.current = 0
+        connectWs(runId, runToken)
+      }
+    }, 15_000)
+    return () => clearInterval(id)
+  }, [runStatus, runId, runToken, wsStatus, connectWs])
 
   // start run
   // continueSession=true: clarification continuation — preserve existing timeline/graph,
@@ -1290,7 +1364,7 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      const res = await apiFetch(`${API_BASE}/api/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
       if (!res.ok) throw new Error(`Server error ${res.status}`)
       const data = await res.json() as { run_id: string; access_token?: string }
       if (!data.access_token) throw new Error("Server did not return a run access token")
@@ -1309,7 +1383,7 @@ export default function App() {
     if (!runId) return
     // Keep isRunningRef=true so reconnect can still fire and receive the
     // authoritative run_done { status: "cancelled" } from the server.
-    await fetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) })
+    await apiFetch(`${API_BASE}/api/run/${runId}/cancel`, { method: "POST", headers: authHeaders(runToken) })
       .catch((err) => console.warn("[run] Cancel request failed for run", runId, err))
   }
 
@@ -1416,7 +1490,7 @@ export default function App() {
           if (rootSlots.length > 0) body.root_agents = rootSlots
         }
 
-        const res = await fetch(`${API_BASE}/api/run`, {
+        const res = await apiFetch(`${API_BASE}/api/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -1542,7 +1616,7 @@ export default function App() {
         if (rootSlots.length > 0) body.root_agents = rootSlots
       }
 
-      const res = await fetch(`${API_BASE}/api/run`, {
+      const res = await apiFetch(`${API_BASE}/api/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1731,7 +1805,7 @@ export default function App() {
     setForkError(null)
 
     try {
-      const res = await fetch(`${API_BASE}/api/run/${runId}/fork`, {
+      const res = await apiFetch(`${API_BASE}/api/run/${runId}/fork`, {
         method: "POST",
         headers: authHeaders(runToken, true),
         body: JSON.stringify({
@@ -2278,7 +2352,7 @@ export default function App() {
 
   const approvePlan = async () => {
     if (!pendingPlan || !runId) return
-    await fetch(`${API_BASE}/api/run/${runId}/approve_plan`, {
+    await apiFetch(`${API_BASE}/api/run/${runId}/approve_plan`, {
       method: "POST", headers: authHeaders(runToken, true),
       body: JSON.stringify({ node_id: pendingPlan.nodeId, children: pendingPlan.children }),
     }).catch((err) => console.warn("[plan] approve_plan request failed:", err))
@@ -2573,12 +2647,66 @@ export default function App() {
             {/* Run health panel */}
             {running && (
               <div className="px-3 py-2 border-t border-border shrink-0 space-y-1.5">
-                {staleWarning && (
-                  <div className="flex items-center gap-1.5 rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-[10px] text-yellow-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" />
-                    No events for 90s — run may be stalled
+                {/* Connection health row */}
+                <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 space-y-1">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <div className="flex items-center gap-2">
+                      {/* Backend status */}
+                      <span className="flex items-center gap-1">
+                        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${backendOnline ? "bg-green-400" : "bg-red-400 animate-pulse"}`} />
+                        <span className={backendOnline ? "text-muted-foreground" : "text-red-400"}>Backend</span>
+                      </span>
+                      {/* WebSocket status */}
+                      <span className="flex items-center gap-1">
+                        <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                          wsStatus === "connected" ? "bg-green-400" :
+                          wsStatus === "reconnecting" ? "bg-yellow-400 animate-pulse" :
+                          "bg-red-400"
+                        }`} />
+                        <span className={
+                          wsStatus === "connected" ? "text-muted-foreground" :
+                          wsStatus === "reconnecting" ? "text-yellow-400" :
+                          "text-red-400"
+                        }>{wsStatus === "connected" ? "Live" : wsStatus === "reconnecting" ? "Reconnecting…" : "Disconnected"}</span>
+                      </span>
+                    </div>
+                    {/* Manual reconnect button — shown when not connected */}
+                    {wsStatus !== "connected" && runId && runToken && (
+                      <button
+                        onClick={() => { reconnectAttemptsRef.current = 0; connectWs(runId, runToken) }}
+                        className="text-[10px] px-1.5 py-0.5 rounded border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 transition-colors"
+                      >
+                        Reconnect
+                      </button>
+                    )}
                   </div>
-                )}
+                  {staleWarning && (
+                    <div className="flex items-center gap-1.5 text-[10px] text-yellow-400">
+                      <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" />
+                      No events for 45s — auto-reconnecting…
+                    </div>
+                  )}
+                  {!backendOnline && (
+                    <div className="text-[10px] text-red-400">
+                      Backend unreachable — run is paused until connection restores
+                    </div>
+                  )}
+                  {apiError && (
+                    <div className="flex items-start gap-1.5 text-[10px] text-orange-400">
+                      <span className="h-1.5 w-1.5 rounded-full bg-orange-400 animate-pulse shrink-0 mt-0.5" />
+                      <span>
+                        <span className="font-mono">{apiError.endpoint}</span>
+                        {apiError.retrying ? " — retrying…" : " — failed"}
+                      </span>
+                    </div>
+                  )}
+                  {llmError && (
+                    <div className="flex items-start gap-1.5 text-[10px] text-red-400">
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-400 shrink-0 mt-0.5" />
+                      <span className="truncate" title={llmError}>LLM: {llmError.slice(0, 80)}{llmError.length > 80 ? "…" : ""}</span>
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <div className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
                   <span className="truncate flex-1">{currentPhase}</span>

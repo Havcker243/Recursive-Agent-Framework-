@@ -313,7 +313,6 @@ class RunManager:
                 "qwen/qwen3.6-plus",
                 "qwen/qwen3.5-35b-a3b",
                 "qwen/qwen3.5-9b",
-                "stepfun/step-3.5-flash:free",
                 "nvidia/nemotron-3-super-120b-a12b:free",
                 "nvidia/nemotron-nano-12b-v2-vl:free",
                 "qwen/qwen3-next-80b-a3b-instruct:free",
