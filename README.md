@@ -7,6 +7,57 @@
 
 ---
 
+## Try it now
+
+**[→ Open the live demo](https://your-raf-app.vercel.app)**
+
+No install. No account. Paste an [OpenRouter API key](https://openrouter.ai/keys) (free tier available), type a goal, and watch a team of AI agents debate and solve it in real time.
+
+**Not sure what to type? Start with one of these:**
+
+```
+Build a REST API for a task management app with user authentication and PostgreSQL
+```
+```
+Write a 12-week strength training plan for an intermediate lifter with progressive overload
+```
+```
+Design a go-to-market strategy for a B2B SaaS product targeting small restaurants
+```
+```
+Plan a 5-day Tokyo trip with a mix of culture, food, and day trips
+```
+
+Want to try with zero cost first? Select **Mock** as the provider — no API key needed, runs fully offline.
+
+---
+
+## What Is This
+
+RAF is a tool that lets you watch AI agents debate, vote, and solve problems together in real time.
+
+You give it a goal. It breaks the goal into sub-tasks, assigns multiple agents to each one, has them propose competing answers, and runs a separate jury to vote on the best proposal — all the way down the recursion tree until everything is solved and merged back up. You see every decision as it happens on a live graph.
+
+It is not a chatbot wrapper. It is a structured multi-agent execution engine — built from first principles to handle tasks that are too complex for a single model call.
+
+---
+
+## Who It Is For
+
+| If you are... | RAF gives you... |
+|---|---|
+| A developer | A way to break large engineering tasks (API design, database schema, architecture) into focused sub-tasks solved by specialized agents in parallel |
+| A researcher | A live observable system for studying multi-agent coordination, voting dynamics, and recursive decomposition with full execution traces |
+| A student | A visual explanation of how AI systems can delegate, debate, and self-correct — with a graph you can click into |
+| A founder / PM | A tool to generate detailed product specs, GTM strategies, and research that would take hours of prompting done in one structured run |
+| Curious about AI | A front-row seat to watch models disagree, vote, and change their minds — with full transparency into every call |
+
+---
+
+> **Note on the video:** A screen recording of a live run is coming. For now, the static screenshots below show the graph after a completed run. The real experience is the graph building node by node in real time as agents work.
+
+---
+
 ![RAF execution graph UI](./image.png)
 
 *The RAF web interface — a live recursive execution graph showing agents proposing, voting, and executing in real time.*
