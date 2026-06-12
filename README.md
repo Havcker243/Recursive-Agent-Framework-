@@ -9,7 +9,7 @@
 
 ## Try it now
 
-**[→ Open the live demo](https://your-raf-app.vercel.app)**
+**[→ Open the live demo](https://recursive-agent-framework.vercel.app/)**
 
 No install. No account. Paste an [OpenRouter API key](https://openrouter.ai/keys) (free tier available), type a goal, and watch a team of AI agents debate and solve it in real time.
 
